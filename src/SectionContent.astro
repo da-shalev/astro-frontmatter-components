@@ -1,0 +1,34 @@
+---
+import { type SectionMeta, registry } from './index';
+
+type Props = {
+	sections?: SectionMeta[];
+};
+
+const { sections } = Astro.props;
+const constructedSections =
+	sections != null
+		? (
+				await Promise.all(
+					sections.map(async (props) => {
+						const section = await registry[props.type]?.load();
+
+						if (section == null || !section.default) {
+							return;
+						}
+
+						return {
+							section,
+							props,
+						};
+					}),
+				)
+			).filter((data) => data != null)
+		: [];
+---
+
+{
+	constructedSections.map((data) => {
+		return <data.section.default {...data.props} />;
+	})
+}
