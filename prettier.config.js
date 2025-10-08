@@ -14,5 +14,12 @@ export default {
 				parser: 'astro',
 			},
 		},
+		{
+			files: ['**/*.md'],
+			options: {
+				parser: 'markdown',
+				useTabs: false,
+			},
+		},
 	],
 };

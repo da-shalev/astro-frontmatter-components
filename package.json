@@ -3,6 +3,19 @@
 	"version": "0.1.0",
 	"main": "./src/index.ts",
 	"type": "module",
+	"files": [
+		"src/index.ts",
+		"src/Frontmatter.astro",
+		"README.md",
+		"getting-started.md",
+		"LICENSE.md"
+	],
+	"keywords": [
+		"withastro",
+		"astro-component",
+		"tooling",
+		"utility"
+	],
 	"devDependencies": {
 		"@astrojs/ts-plugin": "^1.10.4",
 		"@typescript-eslint/parser": "^8.46.0",

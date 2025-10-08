@@ -10,32 +10,20 @@ export { Frontmatter };
  *
  * @template T
  * @returns The inferred TypeScript type from the block's schema
- *
- * @example
- * ```ts
- * const schema: SchemaBuilder = (c: SchemaContext) => ({
- *   title: z.string(),
- *   speed: z.number()
- * });
- *
- * export type Props = PropsOf<typeof schema>;
- * const meta: Props = Astro.props;
- * ```
  */
-export type PropsOf<T extends SchemaBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
+export type SchemaOf<T extends SchemaBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
 
 export type SchemaMeta = z.infer<ReturnType<typeof parseBlocks>>[number];
 
 /**
- * @param {SchemaContext} c - The schema context
- * @returns A ZodRawShape
+ * A function that builds a Zod schema shape for a specific context.
  */
 export type SchemaBuilder = (c: SchemaContext) => z.ZodRawShape;
 
 /**
- * Maps schema identifiers to their component implementations internally.
+ * Maps schema identifiers to their component implementations.
  *
- * This registry is populated by {@link registerAstro} and should not be modified directly.
+ * This registry is populated by {@link registerAstro}
  * Each key is a schema's type field (the block identifier), and each value is the corresponding Astro component.
  */
 export type SchemaRegistry = Record<string, SchemaComponent>;
@@ -55,38 +43,26 @@ type SchemaComponent = {
 };
 
 /**
- * Registers Astro schema components into the global registry from globbed modules. 
+ * Registers Astro schema components into the global registry from globbed modules.
  *
  * @param modules Record of component modules containing `default` and `schema` exports.
  * @returns Collection of the registered Astro components
  *
- * @example
- * The backslash in the glob pattern below is a documentation artifact to prevent parser issues.
- * ```ts
- * registerAstroComponents(
- *   import.meta.glob('./components/**\/*.astro', {
- *     eager: true,
- *   }),
- * );
- * ```
  */
 export function registerAstroComponents(
 	modules: Record<string, { default: AstroComponentFactory; schema: unknown }>,
 ): SchemaRegistry {
-	const registry: Record<string, SchemaComponent> = {};
+	const registry: SchemaRegistry = {};
 
 	Object.entries(modules).map(([path, module]) => {
 		const { default: component, schema } = module;
 
+		// it's a regular Astro component
 		if (schema == undefined) {
 			return;
 		}
 
-		if (component.moduleId == null) {
-			console.log(path, 'has an invalid module id:', component.moduleId);
-			return;
-		}
-
+		// ensure schema is a valid function
 		if (typeof schema !== 'function') {
 			console.error(
 				`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`,
@@ -94,30 +70,41 @@ export function registerAstroComponents(
 			return;
 		}
 
+		// builds the schema early to validate that it's being good
 		const testSchema = schema({} as SchemaContext);
-		if (typeof testSchema !== 'object' || testSchema === null) {
+
+		// ensure schema returns a a valid object
+		if (testSchema === null || typeof testSchema !== 'object') {
 			console.error(
-				`Invalid schema at '${path}'. Expected an object ({ ... }), but received type '${typeof testSchema}'.`,
+				`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
 			);
 			return;
 		}
 
-		const id = path.split('/').pop()?.replace('.astro', '');
-		if (id == undefined) {
+		// ensure schema returns a z.ZodRawShape not a z.ZodObject
+		if (testSchema.shape != null) {
+			console.error(
+				`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
+			);
+			return;
+		}
+
+		const type = path.split('/').pop()?.replace('.astro', '');
+		if (type == undefined) {
 			console.error('Unable to create id for path:', path);
 			return;
 		}
 
-		if (registry[id] && registry[id].path != path) {
+		if (registry[type] && registry[type].path != path) {
 			console.warn(
-				`Duplicate block ID '${id}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[id].path}'.`,
+				`Duplicate block ID '${type}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[type].path}'.`,
 			);
 			return;
 		}
 
-		registry[id] = {
-			type: id,
-			path: path,
+		registry[type] = {
+			type,
+			path,
 			schema: schema as SchemaBuilder,
 			load: { default: component },
 		};
@@ -161,9 +148,7 @@ export function parseBlocks(c: SchemaContext, registry: SchemaRegistry) {
 				return true;
 			});
 
-			console.warn(
-				`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`,
-			);
+			console.warn(`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`);
 
 			return filtered;
 		},
