@@ -1,88 +1,92 @@
 import type { AstroComponentFactory } from 'astro/runtime/server/index.js';
 import type { SchemaContext } from 'astro/content/config';
-import SectionContent from './SectionContent.astro';
+import Frontmatter from './Frontmatter.astro';
 import { z } from 'zod';
 
-export { SectionContent };
+export { Frontmatter };
 
 /**
- * Extracts the inferred TypeScript type from a section builder's Zod schema.
+ * Extracts the inferred TypeScript type from a schema builder's Zod schema.
  *
  * @template T
- * @returns The inferred TypeScript type from the section's schema
+ * @returns The inferred TypeScript type from the block's schema
  *
  * @example
  * ```ts
- * const section: SectionBuilder = (c: SchemaContext) => ({
+ * const schema: SchemaBuilder = (c: SchemaContext) => ({
  *   title: z.string(),
  *   speed: z.number()
  * });
  *
- * export type Props = PropsOf<typeof section>; // can be imported by solid/svelte/etc btw
+ * export type Props = PropsOf<typeof schema>;
  * const meta: Props = Astro.props;
  * ```
  */
-export type PropsOf<T extends SectionBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
+export type PropsOf<T extends SchemaBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
+
+export type SchemaMeta = z.infer<ReturnType<typeof parseBlocks>>[number];
 
 /**
  * @param {SchemaContext} c - The schema context
  * @returns A ZodRawShape
  */
-export type SectionBuilder = (c: SchemaContext) => z.ZodRawShape;
+export type SchemaBuilder = (c: SchemaContext) => z.ZodRawShape;
 
-type SectionComponent = {
-	/// The filename used as a UID for the section (e.g., 'Hero'), excluding the '.astro' extension.
+/**
+ * Maps schema identifiers to their component implementations internally.
+ *
+ * This registry is populated by {@link registerAstro} and should not be modified directly.
+ * Each key is a schema's type field (the block identifier), and each value is the corresponding Astro component.
+ */
+export type SchemaRegistry = Record<string, SchemaComponent>;
+
+type SchemaComponent = {
+	/// The filename used as a UID for the schemas (e.g., 'Hero'), excluding the '.astro' extension.
 	type: string;
 
-	/// The full file path to the section's Astro component
+	/// The relative path to the schemas's Astro component
 	path: string;
 
 	/// The Zod schema builder which creates the data structure for validation.
-	schema: SectionBuilder;
+	schema: SchemaBuilder;
 
-	/// Async factory loader for the Astro component, used to render in Content.astro.
-	/// Returns a Promise<{ default: AstroComponentFactory }>.
-	load: () => Promise<{ default: AstroComponentFactory }>;
+	/// Async factory loader for the Astro component, used for HMR rendering at SectionContent.astro.
+	load: { default: AstroComponentFactory };
 };
 
 /**
- * Internal registry mapping section identifiers to their component implementations.
+ * Registers Astro schema components into the global registry from globbed modules. 
  *
- * This registry is populated by {@link registerSections} and should not be modified directly.
- * Each key is a section type, and each value is the corresponding Astro component.
+ * @param modules Record of component modules containing `default` and `schema` exports.
+ * @returns Collection of the registered Astro components
  *
- * @internal
- */
-export const registry: Record<string, SectionComponent> = {};
-export type SectionMeta = z.infer<ReturnType<typeof parseSections>>[number];
-
-/**
- * Registers Astro section components into the global registry from globbed modules.
- *
- * @param url - Absolute base URL for resolving module locations
- * @param modules - Record of component modules containing `default` and `section` exports.
  * @example
  * The backslash in the glob pattern below is a documentation artifact to prevent parser issues.
  * ```ts
- * registerSections(
- *   import.meta.url,
+ * registerAstroComponents(
  *   import.meta.glob('./components/**\/*.astro', {
  *     eager: true,
  *   }),
  * );
  * ```
  */
-export function registerSections(
-	url: string,
-	modules: Record<string, { default: AstroComponentFactory; section: unknown }>,
-) {
-	Object.entries(modules).forEach(([path, module]) => {
-		const schema = module.section;
+export function registerAstroComponents(
+	modules: Record<string, { default: AstroComponentFactory; schema: unknown }>,
+): SchemaRegistry {
+	const registry: Record<string, SchemaComponent> = {};
+
+	Object.entries(modules).map(([path, module]) => {
+		const { default: component, schema } = module;
+
 		if (schema == undefined) {
 			return;
 		}
 
-		// validate that the SectionBuilder is indeed a function
+		if (component.moduleId == null) {
+			console.log(path, 'has an invalid module id:', component.moduleId);
+			return;
+		}
+
 		if (typeof schema !== 'function') {
 			console.error(
 				`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`,
@@ -90,7 +94,6 @@ export function registerSections(
 			return;
 		}
 
-		// validate that what SectionBuilder returns is indeed an object
 		const testSchema = schema({} as SchemaContext);
 		if (typeof testSchema !== 'object' || testSchema === null) {
 			console.error(
@@ -107,7 +110,7 @@ export function registerSections(
 
 		if (registry[id] && registry[id].path != path) {
 			console.warn(
-				`Duplicate section ID '${id}' detected. Overwriting existing entry at '${registry[id].path}' with new entry at '${path}'.`,
+				`Duplicate block ID '${id}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[id].path}'.`,
 			);
 			return;
 		}
@@ -115,45 +118,43 @@ export function registerSections(
 		registry[id] = {
 			type: id,
 			path: path,
-			// assertion should be correct enough ^o^
-			// if your here because of a crash its my fault report a bug
-			schema: schema as SectionBuilder,
-			load: () => import(/* @vite-ignore */ new URL(path, url).href),
+			schema: schema as SchemaBuilder,
+			load: { default: component },
 		};
 	});
+
+	return registry;
 }
 
 /**
- * Builds the most valid Zod schema for the sections defined in the registry, based on the parsed input.
- * It processes each registered section to create discriminated union schemas, filters out unknown types during preprocessing.
+ * Parses an array of blocks using the registered block types, rejecting any unknown ones.
  *
- * @param c - The schema context, passed to each section's schema function.
- * @returns A Zod schema for an array of valid section objects, or an empty schema if no sections are registered.
+ * @param c - SchemaContext needed for resolving paths of images.
  */
-export function parseSections(c: SchemaContext) {
-	const sections = Object.values(registry).flatMap((section) => {
+export function parseBlocks(c: SchemaContext, registry: SchemaRegistry) {
+	const blocks = Object.values(registry).flatMap((block) => {
 		return z.object({
-			type: z.literal(section.type),
-			...section.schema(c),
+			type: z.literal(block.type),
+			...block.schema(c),
 		});
 	});
 
-	if (sections.length == 0) {
-		console.warn('No sections were initialized. A empty schema will be returned.');
+	if (blocks.length == 0) {
+		console.warn('No blocks were initialized. A empty schema will be returned.');
 		return z.array(z.any());
 	}
 
-	const validTypes = new Set(sections.map((s) => s.shape.type._def.value));
-	const [first, ...rest] = sections;
+	const validTypes = new Set(blocks.map((s) => s.shape.type._def.value));
+	const [first, ...rest] = blocks;
 
 	return z.preprocess(
 		(data: any) => {
 			const warnings: string[] = [];
 
 			// filters out any duplicate types
-			const filtered = data.filter((section: any) => {
-				if (section?.type && !validTypes.has(section.type)) {
-					warnings.push(section.type);
+			const filtered = data.filter((block: any) => {
+				if (block?.type && !validTypes.has(block.type)) {
+					warnings.push(block.type);
 					return false;
 				}
 
@@ -161,7 +162,7 @@ export function parseSections(c: SchemaContext) {
 			});
 
 			console.warn(
-				`Unknown section types were parsed: ${warnings.join(', ')}. They will not show.`,
+				`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`,
 			);
 
 			return filtered;

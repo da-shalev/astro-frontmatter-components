@@ -1,0 +1,30 @@
+---
+import type { SchemaMeta, SchemaRegistry } from './index';
+
+type Props = {
+	blocks?: SchemaMeta[];
+	registry: SchemaRegistry;
+};
+
+const { blocks, registry } = Astro.props;
+
+const builtSections =
+	blocks != null
+		? blocks
+				.map((props) => {
+					const section = registry[props.type];
+					if (section == null) return;
+					return {
+						section: section.load,
+						props,
+					};
+				})
+				.filter((data) => data != null)
+		: [];
+---
+
+{
+	builtSections.map((data) => {
+		return <data.section.default {...data.props} />;
+	})
+}

@@ -1,1 +1,1 @@
-# astro-frontmatter-sections
+# astro-frontmatter-components
