@@ -6,7 +6,7 @@ import { z } from 'zod';
 export { SectionContent };
 
 /**
- * Extracts the props type from a section builder's Zod schema.
+ * Extracts the inferred TypeScript type from a section builder's Zod schema.
  *
  * @template T
  * @returns The inferred TypeScript type from the section's schema
@@ -18,10 +18,8 @@ export { SectionContent };
  *   speed: z.number()
  * });
  *
- * type Props = PropsOf<typeof section>;
+ * export type Props = PropsOf<typeof section>; // can be imported by solid/svelte/etc btw
  * const meta: Props = Astro.props;
- * or
- * const meta = Astro.props as PropsOf<typeof section>;
  * ```
  */
 export type PropsOf<T extends SectionBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
@@ -33,13 +31,13 @@ export type PropsOf<T extends SectionBuilder> = z.infer<z.ZodObject<ReturnType<T
 export type SectionBuilder = (c: SchemaContext) => z.ZodRawShape;
 
 type SectionComponent = {
-	/// The filename used as a UID for the section (e.g., 'hero'), excluding the '.astro' extension.
+	/// The filename used as a UID for the section (e.g., 'Hero'), excluding the '.astro' extension.
 	type: string;
 
 	/// The full file path to the section's Astro component
 	path: string;
 
-	/// The Zod schema builder (z.ZodRawShape) defining the data structure for validation.
+	/// The Zod schema builder which creates the data structure for validation.
 	schema: SectionBuilder;
 
 	/// Async factory loader for the Astro component, used to render in Content.astro.
@@ -49,10 +47,10 @@ type SectionComponent = {
 
 /**
  * Internal registry mapping section identifiers to their component implementations.
- * 
+ *
  * This registry is populated by {@link registerSections} and should not be modified directly.
  * Each key is a section type, and each value is the corresponding Astro component.
- * 
+ *
  * @internal
  */
 export const registry: Record<string, SectionComponent> = {};
@@ -61,8 +59,8 @@ export type SectionMeta = z.infer<ReturnType<typeof parseSections>>[number];
 /**
  * Registers Astro section components into the global registry from globbed modules.
  *
- * @param url - Base URL for dynamic imports (e.g., `import.meta.url`).
- * @param paths - Record of paths to { default: AstroComponentFactory; section: SectionBuilder }.
+ * @param url - Absolute base URL for resolving module locations
+ * @param modules - Record of component modules containing `default` and `section` exports.
  * @example
  * The backslash in the glob pattern below is a documentation artifact to prevent parser issues.
  * ```ts
@@ -76,16 +74,28 @@ export type SectionMeta = z.infer<ReturnType<typeof parseSections>>[number];
  */
 export function registerSections(
 	url: string,
-	paths: Record<string, { default: AstroComponentFactory; section: SectionBuilder }>,
+	modules: Record<string, { default: AstroComponentFactory; section: unknown }>,
 ) {
-	Object.entries(paths).forEach(([path, module]) => {
+	Object.entries(modules).forEach(([path, module]) => {
 		const schema = module.section;
 		if (schema == undefined) {
 			return;
 		}
 
+		// validate that the SectionBuilder is indeed a function
 		if (typeof schema !== 'function') {
-			console.error(`${path}: a sections defined schema is not a function: ${typeof schema}.`);
+			console.error(
+				`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`,
+			);
+			return;
+		}
+
+		// validate that what SectionBuilder returns is indeed an object
+		const testSchema = schema({} as SchemaContext);
+		if (typeof testSchema !== 'object' || testSchema === null) {
+			console.error(
+				`Invalid schema at '${path}'. Expected an object ({ ... }), but received type '${typeof testSchema}'.`,
+			);
 			return;
 		}
 
@@ -105,7 +115,8 @@ export function registerSections(
 		registry[id] = {
 			type: id,
 			path: path,
-			// assertion gets validated later
+			// assertion should be correct enough ^o^
+			// if your here because of a crash its my fault report a bug
 			schema: schema as SectionBuilder,
 			load: () => import(/* @vite-ignore */ new URL(path, url).href),
 		};
@@ -113,27 +124,18 @@ export function registerSections(
 }
 
 /**
- * Builds the most valid Zod schema for the sections defined in the registry, based on the parsed input. It processes each registered section to create discriminated union schemas, filters out unknown types during preprocessing.
+ * Builds the most valid Zod schema for the sections defined in the registry, based on the parsed input.
+ * It processes each registered section to create discriminated union schemas, filters out unknown types during preprocessing.
  *
  * @param c - The schema context, passed to each section's schema function.
- * @returns A Zod schema for an array of valid section objects, or `z.array(z.any())` if no sections are registered.
+ * @returns A Zod schema for an array of valid section objects, or an empty schema if no sections are registered.
  */
 export function parseSections(c: SchemaContext) {
 	const sections = Object.values(registry).flatMap((section) => {
-		const schema = section.schema(c);
-		if (typeof schema !== 'object') {
-			console.error(
-				`Invalid schema from section type '${section.type}'. Expected an object ({ ... }), but received type '${typeof schema}'.`,
-			);
-			return [];
-		}
-
-		return [
-			z.object({
-				type: z.literal(section.type),
-				...schema,
-			}),
-		];
+		return z.object({
+			type: z.literal(section.type),
+			...section.schema(c),
+		});
 	});
 
 	if (sections.length == 0) {
@@ -147,6 +149,8 @@ export function parseSections(c: SchemaContext) {
 	return z.preprocess(
 		(data: any) => {
 			const warnings: string[] = [];
+
+			// filters out any duplicate types
 			const filtered = data.filter((section: any) => {
 				if (section?.type && !validTypes.has(section.type)) {
 					warnings.push(section.type);
