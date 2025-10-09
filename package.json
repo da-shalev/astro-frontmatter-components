@@ -5,13 +5,11 @@
 	"type": "module",
 	"files": [
 		"src/index.ts",
-		"src/Frontmatter.astro",
-		"README.md",
-		"getting-started.md",
-		"LICENSE.md"
+		"src/Frontmatter.astro"
 	],
 	"keywords": [
 		"withastro",
+		"astro-integration",
 		"astro-component",
 		"tooling",
 		"utility"
@@ -26,5 +24,9 @@
 	},
 	"peerDependencies": {
 		"astro": "^5.14.1"
+	},
+	"dependencies": {
+		"@inox-tools/runtime-logger": "^0.7.0",
+		"tinyglobby": "^0.2.15"
 	}
 }

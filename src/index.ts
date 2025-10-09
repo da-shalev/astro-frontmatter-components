@@ -1,9 +1,19 @@
-import type { AstroComponentFactory } from 'astro/runtime/server/index.js';
+import { type AstroComponentFactory } from 'astro/runtime/server/index.js';
 import type { SchemaContext } from 'astro/content/config';
-import Frontmatter from './Frontmatter.astro';
 import { z } from 'zod';
+import { runtimeLogger } from '@inox-tools/runtime-logger';
+import { globSync } from 'tinyglobby';
+import Frontmatter from './Frontmatter.astro';
 
-export { Frontmatter };
+export function glob(patterns: string | string[]) {
+	return globSync(patterns, {
+		absolute: true,
+		onlyFiles: true,
+		ignore: ['**/node_modules/**'],
+	});
+}
+
+// export { Frontmatter };
 
 /**
  * Extracts the inferred TypeScript type from a schema builder's Zod schema.
@@ -28,6 +38,8 @@ export type SchemaBuilder = (c: SchemaContext) => z.ZodRawShape;
  */
 export type SchemaRegistry = Record<string, SchemaComponent>;
 
+type BlockData = { schema?: unknown; default?: unknown };
+
 type SchemaComponent = {
 	/// The filename used as a UID for the schemas (e.g., 'Hero'), excluding the '.astro' extension.
 	type: string;
@@ -42,75 +54,59 @@ type SchemaComponent = {
 	load: { default: AstroComponentFactory };
 };
 
-/**
- * Registers Astro schema components into the global registry from globbed modules.
- *
- * @param modules Record of component modules containing `default` and `schema` exports.
- * @returns Collection of the registered Astro components
- *
- */
-export function registerAstroComponents(
-	modules: Record<string, { default: AstroComponentFactory; schema: unknown }>,
-): SchemaRegistry {
-	const registry: SchemaRegistry = {};
+function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegrationLogger) {
+	const registry = getSchemas();
+	const { default: component, schema } = block;
 
-	Object.entries(modules).map(([path, module]) => {
-		const { default: component, schema } = module;
+	// it's a regular Astro component
+	if (schema == null) {
+		return;
+	}
 
-		// it's a regular Astro component
-		if (schema == undefined) {
-			return;
-		}
+	// ensure schema is a valid function
+	if (typeof schema !== 'function') {
+		logger.error(`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`);
+		return;
+	}
 
-		// ensure schema is a valid function
-		if (typeof schema !== 'function') {
-			console.error(
-				`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`,
-			);
-			return;
-		}
+	// builds the schema early to validate that it's being good
+	const testSchema = schema({} as SchemaContext);
 
-		// builds the schema early to validate that it's being good
-		const testSchema = schema({} as SchemaContext);
+	// ensure schema returns a a valid object
+	if (testSchema === null || typeof testSchema !== 'object') {
+		logger.error(
+			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
+		);
+		return;
+	}
 
-		// ensure schema returns a a valid object
-		if (testSchema === null || typeof testSchema !== 'object') {
-			console.error(
-				`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
-			);
-			return;
-		}
+	// ensure schema returns a z.ZodRawShape not a z.ZodObject
+	if (testSchema.shape != null) {
+		logger.error(
+			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
+		);
+		return;
+	}
 
-		// ensure schema returns a z.ZodRawShape not a z.ZodObject
-		if (testSchema.shape != null) {
-			console.error(
-				`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
-			);
-			return;
-		}
+	const type = path.split('/').pop()?.replace('.astro', '');
+	if (type == undefined) {
+		logger.error(`Unable to create id for path: ${path}`);
+		return;
+	}
 
-		const type = path.split('/').pop()?.replace('.astro', '');
-		if (type == undefined) {
-			console.error('Unable to create id for path:', path);
-			return;
-		}
+	if (registry[type] && registry[type].path != path) {
+		logger.warn(
+			`Duplicate block ID '${type}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[type].path}'.`,
+		);
+		return;
+	}
 
-		if (registry[type] && registry[type].path != path) {
-			console.warn(
-				`Duplicate block ID '${type}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[type].path}'.`,
-			);
-			return;
-		}
-
-		registry[type] = {
-			type,
-			path,
-			schema: schema as SchemaBuilder,
-			load: { default: component },
-		};
-	});
-
-	return registry;
+	registry[type] = {
+		type,
+		path,
+		schema: schema as SchemaBuilder,
+		load: { default: component as AstroComponentFactory },
+	};
 }
 
 /**
@@ -118,7 +114,8 @@ export function registerAstroComponents(
  *
  * @param c - SchemaContext needed for resolving paths of images.
  */
-export function parseBlocks(c: SchemaContext, registry: SchemaRegistry) {
+export function parseBlocks(c: SchemaContext, logger: AstroIntegrationLogger) {
+	const registry = getSchemas();
 	const blocks = Object.values(registry).flatMap((block) => {
 		return z.object({
 			type: z.literal(block.type),
@@ -127,7 +124,7 @@ export function parseBlocks(c: SchemaContext, registry: SchemaRegistry) {
 	});
 
 	if (blocks.length == 0) {
-		console.warn('No blocks were initialized. A empty schema will be returned.');
+		logger.warn('No blocks were initialized. A empty schema will be returned.');
 		return z.array(z.any());
 	}
 
@@ -148,11 +145,67 @@ export function parseBlocks(c: SchemaContext, registry: SchemaRegistry) {
 				return true;
 			});
 
-			console.warn(`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`);
+			logger.warn(`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`);
 
 			return filtered;
 		},
 
 		z.array(z.discriminatedUnion('type', [first!, ...rest!])),
 	);
+}
+
+import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
+
+declare global {
+	var __astroFrontmatterComponentRegistry: SchemaRegistry | undefined;
+}
+
+const SCHEMA_KEY = '__astroFrontmatterComponentRegistry' as const;
+
+function getSchemas(): SchemaRegistry {
+	if (!globalThis[SCHEMA_KEY]) {
+		globalThis[SCHEMA_KEY] = {};
+	}
+
+	return globalThis[SCHEMA_KEY];
+}
+
+export type AstroFrontmatterComponents = {
+	enableLogger?: boolean;
+	components: string[];
+};
+
+export function frontmatterComponents({
+	components,
+}: AstroFrontmatterComponents): AstroIntegration {
+	return {
+		name: 'astro-frontmatter-components',
+		hooks: {
+			'astro:config:setup': (params) => {
+				runtimeLogger(params, {
+					name: 'astro-frontmatter-components',
+				});
+			},
+			'astro:server:start': async ({ logger }) => {},
+			'astro:server:setup': async ({ server, refreshContent, logger }) => {
+				for (const path of components) {
+					try {
+						const component = await server.ssrLoadModule(path);
+						buildAstroBlock(path, component, logger);
+						logger.debug(`Registered component: ${path}`);
+					} catch (e) {
+						// this usually happens if importing a .astro file you shouldn't like layouts or pages
+						logger.error(`Failed loading ${path}: ${e}`);
+					}
+				}
+
+				server.watcher.on('change', async (path: string) => {
+					if (components.includes(path)) {
+						const component = await server.ssrLoadModule(path);
+						buildAstroBlock(path, component, logger);
+					}
+				});
+			},
+		},
+	};
 }
