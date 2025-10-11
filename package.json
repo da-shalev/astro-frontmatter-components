@@ -7,6 +7,10 @@
 		"src/index.ts",
 		"src/Frontmatter.astro"
 	],
+	"exports": {
+		".": "./src/index.ts",
+		"./renderer": "./src/Frontmatter.astro"
+	},
 	"keywords": [
 		"withastro",
 		"astro-integration",

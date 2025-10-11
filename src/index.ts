@@ -1,9 +1,9 @@
 import { type AstroComponentFactory } from 'astro/runtime/server/index.js';
 import type { SchemaContext } from 'astro/content/config';
+import type { AstroIntegration, AstroConfig, AstroIntegrationLogger } from 'astro';
 import { z } from 'zod';
 import { runtimeLogger } from '@inox-tools/runtime-logger';
 import { globSync } from 'tinyglobby';
-import Frontmatter from './Frontmatter.astro';
 
 export function glob(patterns: string | string[]) {
 	return globSync(patterns, {
@@ -54,19 +54,47 @@ type SchemaComponent = {
 	load: { default: AstroComponentFactory };
 };
 
-function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegrationLogger) {
-	const registry = getSchemas();
+function getType(path: string): string | undefined {
+	return path.split('/').pop()?.replace('.astro', '');
+}
+
+/**
+ * @returns boolean - if the type is new to the registry
+ */
+function buildAstroBlock(
+	path: string,
+	block: BlockData,
+	logger: AstroIntegrationLogger,
+	registry: SchemaRegistry,
+): boolean {
 	const { default: component, schema } = block;
+
+	const type = getType(path);
+	if (type == undefined) {
+		logger.error(`Unable to create id for path: ${path}. Report! big! bad! bug! rn!`);
+		return false;
+	}
+
+	const prevPath = registry[type]?.path;
+
+	delete registry[type];
 
 	// it's a regular Astro component
 	if (schema == null) {
-		return;
+		return false;
+	}
+
+	if (registry[type] && prevPath != path) {
+		logger.warn(
+			`Duplicate block ID '${type}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[type].path}'.`,
+		);
+		return false;
 	}
 
 	// ensure schema is a valid function
 	if (typeof schema !== 'function') {
 		logger.error(`Invalid schema at ${path}. Defined schema is not a function: ${typeof schema}.`);
-		return;
+		return false;
 	}
 
 	// builds the schema early to validate that it's being good
@@ -77,7 +105,7 @@ function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegratio
 		logger.error(
 			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
 		);
-		return;
+		return false;
 	}
 
 	// ensure schema returns a z.ZodRawShape not a z.ZodObject
@@ -85,20 +113,13 @@ function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegratio
 		logger.error(
 			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
 		);
-		return;
+		return false;
 	}
 
-	const type = path.split('/').pop()?.replace('.astro', '');
-	if (type == undefined) {
-		logger.error(`Unable to create id for path: ${path}`);
-		return;
-	}
-
-	if (registry[type] && registry[type].path != path) {
-		logger.warn(
-			`Duplicate block ID '${type}' detected. Ignoring new entry at '${path}' and keeping existing entry at '${registry[type].path}'.`,
-		);
-		return;
+	let isNew = false;
+	if (!(type in registry)) {
+		logger.info(`Registered new component: ${path}`);
+		isNew = true;
 	}
 
 	registry[type] = {
@@ -107,6 +128,8 @@ function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegratio
 		schema: schema as SchemaBuilder,
 		load: { default: component as AstroComponentFactory },
 	};
+
+	return isNew;
 }
 
 /**
@@ -115,7 +138,7 @@ function buildAstroBlock(path: string, block: BlockData, logger: AstroIntegratio
  * @param c - SchemaContext needed for resolving paths of images.
  */
 export function parseBlocks(c: SchemaContext, logger: AstroIntegrationLogger) {
-	const registry = getSchemas();
+	const registry = getRegistry();
 	const blocks = Object.values(registry).flatMap((block) => {
 		return z.object({
 			type: z.literal(block.type),
@@ -154,19 +177,14 @@ export function parseBlocks(c: SchemaContext, logger: AstroIntegrationLogger) {
 	);
 }
 
-import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
-
 declare global {
 	var __astroFrontmatterComponentRegistry: SchemaRegistry | undefined;
 }
 
 const SCHEMA_KEY = '__astroFrontmatterComponentRegistry' as const;
 
-function getSchemas(): SchemaRegistry {
-	if (!globalThis[SCHEMA_KEY]) {
-		globalThis[SCHEMA_KEY] = {};
-	}
-
+export function getRegistry(): SchemaRegistry {
+	globalThis[SCHEMA_KEY] ??= {};
 	return globalThis[SCHEMA_KEY];
 }
 
@@ -175,24 +193,25 @@ export type AstroFrontmatterComponents = {
 	components: string[];
 };
 
+const INTEGRATION_NAME: string = 'astro-frontmatter-components';
+
 export function frontmatterComponents({
 	components,
 }: AstroFrontmatterComponents): AstroIntegration {
 	return {
-		name: 'astro-frontmatter-components',
+		name: INTEGRATION_NAME,
 		hooks: {
-			'astro:config:setup': (params) => {
+			'astro:config:setup': async (params) => {
 				runtimeLogger(params, {
-					name: 'astro-frontmatter-components',
+					name: INTEGRATION_NAME,
 				});
 			},
-			'astro:server:start': async ({ logger }) => {},
 			'astro:server:setup': async ({ server, refreshContent, logger }) => {
+				const registry = getRegistry();
 				for (const path of components) {
 					try {
 						const component = await server.ssrLoadModule(path);
-						buildAstroBlock(path, component, logger);
-						logger.debug(`Registered component: ${path}`);
+						buildAstroBlock(path, component, logger, registry);
 					} catch (e) {
 						// this usually happens if importing a .astro file you shouldn't like layouts or pages
 						logger.error(`Failed loading ${path}: ${e}`);
@@ -200,12 +219,42 @@ export function frontmatterComponents({
 				}
 
 				server.watcher.on('change', async (path: string) => {
-					if (components.includes(path)) {
-						const component = await server.ssrLoadModule(path);
-						buildAstroBlock(path, component, logger);
+					if (!path.endsWith('.astro')) {
+						return;
+					}
+
+					const component = await server.ssrLoadModule(path);
+
+					// check if the type is entirely new
+					if (!buildAstroBlock(path, component, logger, registry)) {
+						return;
+					}
+
+					// BUG: invalidate cache
+					// below is a hack I wrote, I'll be opening up an issue
+
+					// let content = await readFile(configPath, 'utf-8');
+					// await writeFile(configPath, content + '\n', 'utf-8');
+					//
+					// server.moduleGraph.invalidateAll();
+					// server.ws.send({
+					// 	type: 'full-reload',
+					// });
+				});
+
+				server.watcher.on('unlink', async (path: string) => {
+					if (!path.endsWith('.astro')) {
+						return;
+					}
+
+					const type = getType(path);
+					if (type != null) {
+						delete registry[type];
 					}
 				});
 			},
 		},
 	};
 }
+
+import { readFile, writeFile } from 'fs/promises';

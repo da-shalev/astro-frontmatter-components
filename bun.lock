@@ -4,6 +4,7 @@
     "": {
       "name": "astro-frontmatter-components",
       "dependencies": {
+        "@inox-tools/runtime-logger": "^0.7.0",
         "tinyglobby": "^0.2.15",
       },
       "devDependencies": {
@@ -15,7 +16,6 @@
         "prettier-plugin-astro": "^0.14.1",
       },
       "peerDependencies": {
-        "@inox-tools/runtime-logger": "^0.7.0",
         "astro": "^5.14.1",
       },
     },
