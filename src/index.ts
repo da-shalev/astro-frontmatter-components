@@ -1,6 +1,6 @@
 import { type AstroComponentFactory } from 'astro/runtime/server/index.js';
 import type { SchemaContext } from 'astro/content/config';
-import type { AstroIntegration, AstroConfig, AstroIntegrationLogger } from 'astro';
+import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
 import { z } from 'zod';
 import { runtimeLogger } from '@inox-tools/runtime-logger';
 import { globSync } from 'tinyglobby';
@@ -12,8 +12,6 @@ export function glob(patterns: string | string[]) {
 		ignore: ['**/node_modules/**'],
 	});
 }
-
-// export { Frontmatter };
 
 /**
  * Extracts the inferred TypeScript type from a schema builder's Zod schema.
@@ -49,9 +47,6 @@ type SchemaComponent = {
 
 	/// The Zod schema builder which creates the data structure for validation.
 	schema: SchemaBuilder;
-
-	/// Async factory loader for the Astro component, used for HMR rendering at SectionContent.astro.
-	load: { default: AstroComponentFactory };
 };
 
 function getType(path: string): string | undefined {
@@ -98,23 +93,23 @@ function buildAstroBlock(
 	}
 
 	// builds the schema early to validate that it's being good
-	const testSchema = schema({} as SchemaContext);
+	// const testSchema = schema({} as SchemaContext);
 
 	// ensure schema returns a a valid object
-	if (testSchema === null || typeof testSchema !== 'object') {
-		logger.error(
-			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
-		);
-		return false;
-	}
+	// if (testSchema === null || typeof testSchema !== 'object') {
+	// 	logger.error(
+	// 		`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received type '${typeof testSchema}'.`,
+	// 	);
+	// 	return false;
+	// }
 
 	// ensure schema returns a z.ZodRawShape not a z.ZodObject
-	if (testSchema.shape != null) {
-		logger.error(
-			`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
-		);
-		return false;
-	}
+	// if (testSchema.shape != null) {
+	// 	logger.error(
+	// 		`Invalid schema at '${path}'. Expected a raw object ({ ... }), but received a z.object()`,
+	// 	);
+	// 	return false;
+	// }
 
 	let isNew = false;
 	if (!(type in registry)) {
@@ -126,7 +121,6 @@ function buildAstroBlock(
 		type,
 		path,
 		schema: schema as SchemaBuilder,
-		load: { default: component as AstroComponentFactory },
 	};
 
 	return isNew;
@@ -168,7 +162,9 @@ export function parseBlocks(c: SchemaContext, logger: AstroIntegrationLogger) {
 				return true;
 			});
 
-			logger.warn(`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`);
+			if (warnings.length > 0) {
+				logger.warn(`Unknown block types were parsed: ${warnings.join(', ')}. They will not show.`);
+			}
 
 			return filtered;
 		},
@@ -225,7 +221,8 @@ export function frontmatterComponents({
 
 					const component = await server.ssrLoadModule(path);
 
-					// check if the type is entirely new
+					// check if the type is notg entirely new, if not the content cache
+					// does not need to be invalidated
 					if (!buildAstroBlock(path, component, logger, registry)) {
 						return;
 					}
@@ -256,5 +253,3 @@ export function frontmatterComponents({
 		},
 	};
 }
-
-import { readFile, writeFile } from 'fs/promises';

@@ -1,15 +1,18 @@
 ---
+import { logger } from '@it-astro:logger:astro-frontmatter-components';
 import type { SchemaMeta } from './index';
 import { getRegistry } from './index';
 
 type Props = {
 	blocks?: SchemaMeta[];
 };
-
 const { blocks } = Astro.props;
 
-const registry = getRegistry();
+if (blocks == null) {
+	logger.warn('Provided data is null');
+}
 
+const registry = getRegistry();
 const builtSections =
 	blocks != null
 		? blocks
@@ -17,7 +20,7 @@ const builtSections =
 					const section = registry[props.type];
 					if (section == null) return;
 					return {
-						section: section.load,
+						path: section.path,
 						props,
 					};
 				})
@@ -26,7 +29,8 @@ const builtSections =
 ---
 
 {
-	builtSections.map((data) => {
-		return <data.section.default {...data.props} />;
+	builtSections.map(async (data) => {
+		const Component = (/* @vite-ignore */ await import(data.path)).default;
+		return <Component {...data.props} />;
 	})
 }

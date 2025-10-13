@@ -27,7 +27,7 @@
 		"prettier-plugin-astro": "^0.14.1"
 	},
 	"peerDependencies": {
-		"astro": "^5.14.1"
+		"astro": "^5.14.4"
 	},
 	"dependencies": {
 		"@inox-tools/runtime-logger": "^0.7.0",
