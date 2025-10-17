@@ -1,9 +1,13 @@
-import { type AstroComponentFactory } from 'astro/runtime/server/index.js';
 import type { SchemaContext } from 'astro/content/config';
 import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
 import { z } from 'zod';
 import { runtimeLogger } from '@inox-tools/runtime-logger';
 import { globSync } from 'tinyglobby';
+import { parse } from '@typescript-eslint/typescript-estree';
+import * as esbuild from 'esbuild';
+import fs from 'fs/promises';
+import { dirname, resolve } from 'path';
+import { createHash } from 'crypto';
 
 export function glob(patterns: string | string[]) {
 	return globSync(patterns, {
@@ -36,8 +40,6 @@ export type SchemaBuilder = (c: SchemaContext) => z.ZodRawShape;
  */
 export type SchemaRegistry = Record<string, SchemaComponent>;
 
-type BlockData = { schema?: unknown; default?: unknown };
-
 type SchemaComponent = {
 	/// The filename used as a UID for the schemas (e.g., 'Hero'), excluding the '.astro' extension.
 	type: string;
@@ -58,12 +60,11 @@ function getType(path: string): string | undefined {
  */
 function buildAstroBlock(
 	path: string,
-	block: BlockData,
 	logger: AstroIntegrationLogger,
 	registry: SchemaRegistry,
+	schema?: unknown,
 ): boolean {
-	const { default: component, schema } = block;
-
+	if (schema == undefined) return false;
 	const type = getType(path);
 	if (type == undefined) {
 		logger.error(`Unable to create id for path: ${path}. Report! big! bad! bug! rn!`);
@@ -196,34 +197,126 @@ export function frontmatterComponents({
 }: AstroFrontmatterComponents): AstroIntegration {
 	return {
 		name: INTEGRATION_NAME,
+
 		hooks: {
 			'astro:config:setup': async (params) => {
 				runtimeLogger(params, {
 					name: INTEGRATION_NAME,
 				});
+
+				const virtualModules = new Map();
+
+				params.updateConfig({
+					vite: {
+						plugins: [
+							{
+								name: INTEGRATION_NAME,
+								resolveId(id, importer) {
+									if (id.startsWith('virtual:schema:')) return '\0' + id;
+									if (id === 'virtual:astro-components') return '\0virtual:astro-components';
+
+									if (importer?.startsWith('\0virtual:schema:') && id.startsWith('./')) {
+										const data = virtualModules.get(importer);
+										return data ? resolve(dirname(data.realPath), id) : null;
+									}
+								},
+
+								load(id) {
+									if (id.startsWith('\0virtual:schema:')) {
+										return virtualModules.get(id)?.code;
+									}
+
+									if (id === '\0virtual:astro-components') {
+										const registry = getRegistry();
+										const imports = Object.values(registry)
+											.map((block, i) => `import Component${i} from '${block.path}';`)
+											.join('\n');
+
+										const map = Object.values(registry)
+											.map((block, i) => `  '${block.type}': Component${i}`)
+											.join(',\n');
+
+										return `${imports}\nexport const componentMap = {\n${map}\n};`;
+									}
+								},
+
+								configureServer: {
+									async handler(server) {
+										for (const path of components) {
+											const file = await fs.readFile(path, 'utf-8');
+											const parts = file.split('---');
+											const frontmatter = parts[1];
+											if (!frontmatter) {
+												// don't fail silently
+												continue;
+											}
+
+											const ast = parse(frontmatter, {
+												jsx: true,
+												range: true,
+												comment: true,
+											});
+
+											const imports = ast.body
+												.filter((node) => node.type === 'ImportDeclaration')
+												.map((node) => frontmatter.slice(node.range[0], node.range[1]))
+												.join('\n');
+
+											const schemaExport = ast.body.find(
+												(node) => node.type === 'ExportNamedDeclaration',
+											);
+
+											if (!schemaExport) {
+												// don't fail silently
+												continue;
+											}
+
+											const codeToBundle = `${imports}\n${frontmatter.slice(schemaExport.range[0], schemaExport.range[1])}`;
+
+											const result = await esbuild.build({
+												stdin: {
+													contents: codeToBundle,
+													loader: 'ts',
+													resolveDir: dirname(path),
+												},
+												bundle: true,
+												format: 'esm',
+												write: false,
+												external: ['astro:content', '@it-astro:*', '*.astro'],
+											});
+
+											const bundledCode = result.outputFiles[0].text;
+											const hash = createHash('md5').update(path).digest('hex');
+											const virtualId = '\0virtual:schema:' + hash;
+
+											virtualModules.set(virtualId, { code: bundledCode, realPath: path });
+
+											const module = await server.ssrLoadModule('virtual:schema:' + hash);
+
+											if (module?.schema) {
+												buildAstroBlock(path, params.logger, getRegistry(), module.schema);
+											}
+										}
+									},
+								},
+							},
+						],
+					},
+				});
 			},
+
 			'astro:server:setup': async ({ server, refreshContent, logger }) => {
 				const registry = getRegistry();
-				for (const path of components) {
-					try {
-						const component = await server.ssrLoadModule(path);
-						buildAstroBlock(path, component, logger, registry);
-					} catch (e) {
-						// this usually happens if importing a .astro file you shouldn't like layouts or pages
-						logger.error(`Failed loading ${path}: ${e}`);
-					}
-				}
-
 				server.watcher.on('change', async (path: string) => {
 					if (!path.endsWith('.astro')) {
 						return;
 					}
-
 					const component = await server.ssrLoadModule(path);
 
 					// check if the type is notg entirely new, if not the content cache
 					// does not need to be invalidated
-					if (!buildAstroBlock(path, component, logger, registry)) {
+					const registry = getRegistry();
+					if (!buildAstroBlock(path, logger, registry, component.schema)) {
 						return;
 					}
 
