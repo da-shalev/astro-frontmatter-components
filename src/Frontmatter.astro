@@ -1,18 +1,13 @@
 ---
-import { logger } from '@it-astro:logger:astro-frontmatter-components';
 import type { SchemaMeta } from './index';
 import { getRegistry } from './index';
-import { componentMap } from 'virtual:astro-components';
+import { components } from 'virtual:astro-frontmatter-components';
 
 type Props = {
 	blocks?: SchemaMeta[];
 	callback?: (data: SchemaMeta, i: number) => void;
 };
 const { blocks, callback } = Astro.props;
-
-if (blocks == null) {
-	logger.warn('Provided data is null');
-}
 
 const registry = getRegistry();
 ---
@@ -24,7 +19,7 @@ const registry = getRegistry();
 			callback(props, i);
 		}
 
-		const Component = componentMap[section.type];
+		const Component = components[section.type];
 		return <Component {...props} />;
 	})
 }

@@ -191,6 +191,9 @@ export type AstroFrontmatterComponents = {
 };
 
 const INTEGRATION_NAME: string = 'astro-frontmatter-components';
+const VIRTUAL: string = `virtual:${INTEGRATION_NAME}`;
+const virtual = (id: string) => `\0${id}`;
+const isVirtual = (id: string) => id.startsWith('\0');
 
 export function frontmatterComponents({
 	components,
@@ -212,31 +215,31 @@ export function frontmatterComponents({
 							{
 								name: INTEGRATION_NAME,
 								resolveId(id, importer) {
-									if (id.startsWith('virtual:schema:')) return '\0' + id;
-									if (id === 'virtual:astro-components') return '\0virtual:astro-components';
+									if (id.startsWith('virtual:schema:')) return virtual(id);
+									if (id === VIRTUAL) return virtual(VIRTUAL);
 
-									if (importer?.startsWith('\0virtual:schema:') && id.startsWith('./')) {
+									if (importer?.startsWith(virtual('virtual:schema:')) && id.startsWith('./')) {
 										const data = virtualModules.get(importer);
 										return data ? resolve(dirname(data.realPath), id) : null;
 									}
 								},
 
 								load(id) {
-									if (id.startsWith('\0virtual:schema:')) {
+									if (isVirtual(id) && id.includes('virtual:schema:')) {
 										return virtualModules.get(id)?.code;
 									}
 
-									if (id === '\0virtual:astro-components') {
+									if (id === virtual(VIRTUAL)) {
 										const registry = getRegistry();
 										const imports = Object.values(registry)
 											.map((block, i) => `import Component${i} from '${block.path}';`)
 											.join('\n');
 
 										const map = Object.values(registry)
-											.map((block, i) => `  '${block.type}': Component${i}`)
+											.map((block, i) => `'${block.type}': Component${i}`)
 											.join(',\n');
 
-										return `${imports}\nexport const componentMap = {\n${map}\n};`;
+										return `${imports}\n\nexport const components = {\n${map}\n};`;
 									}
 								},
 
