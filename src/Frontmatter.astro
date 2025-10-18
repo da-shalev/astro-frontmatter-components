@@ -1,7 +1,5 @@
 ---
-import type { SchemaMeta } from './index';
-import { getRegistry } from './index';
-import { components } from 'virtual:astro-frontmatter-components';
+import { getRegistry, type SchemaMeta } from './integration';
 
 type Props = {
 	blocks?: SchemaMeta[];
@@ -10,16 +8,17 @@ type Props = {
 const { blocks, callback } = Astro.props;
 
 const registry = getRegistry();
+const { components } = await import('virtual:astro-frontmatter-components');
 ---
 
 {
-	blocks?.map((props, i) => {
-		const section = registry[props.type];
+	blocks?.map(async (props, i) => {
 		if (callback) {
 			callback(props, i);
 		}
 
-		const Component = components[section.type];
+		const block = registry.components[props.type];
+		const Component = components[block.type];
 		return <Component {...props} />;
 	})
 }

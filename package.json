@@ -2,15 +2,12 @@
 	"name": "astro-frontmatter-components",
 	"version": "0.1.0",
 	"main": "./src/index.ts",
-	"type": "module",
-	"files": [
-		"src/index.ts",
-		"src/Frontmatter.astro"
-	],
 	"exports": {
 		".": "./src/index.ts",
-		"./renderer": "./src/Frontmatter.astro"
+		"./integration": "./src/integration.ts",
+    "./renderer": "./src/Frontmatter.astro"
 	},
+	"type": "module",
 	"include": [
 		"env.d.ts",
 		"src/**/*"
