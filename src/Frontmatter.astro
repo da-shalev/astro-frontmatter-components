@@ -13,7 +13,7 @@ const registry = getRegistry();
 ---
 
 {
-	blocks?.map(async (props, i) => {
+	blocks?.map((props, i) => {
 		const section = registry[props.type];
 		if (callback) {
 			callback(props, i);

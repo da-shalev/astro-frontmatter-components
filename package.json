@@ -11,6 +11,10 @@
 		".": "./src/index.ts",
 		"./renderer": "./src/Frontmatter.astro"
 	},
+	"include": [
+		"env.d.ts",
+		"src/**/*"
+	],
 	"keywords": [
 		"withastro",
 		"astro-integration",
