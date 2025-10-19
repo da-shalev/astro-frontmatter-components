@@ -144,7 +144,7 @@ export type AstroFrontmatterComponents = {
 };
 
 const INTEGRATION_NAME: string = 'astro-frontmatter-components';
-const VIRTUAL: string = `virtual:${INTEGRATION_NAME}`;
+const VIRTUAL: string = `virtual:astro-frontmatter-components`;
 const virtual = (id: string) => `\0${id}`;
 const isVirtual = (id: string) => id.startsWith('\0');
 
@@ -182,15 +182,27 @@ export function frontmatterComponents({
 										return virtualModules.get(id)?.code;
 									}
 
+									// Generates static imports for SSR builds.
+									// Dynamic import() of .astro files fails during SSR compilation.
+									// which is why the path from the registry cannot be directly used
 									if (id === virtual(VIRTUAL)) {
+										// Sanitize filenames to valid JS identifiers (e.g., 'hero-section' → 'hero_section')
+										const toIdentifier = (str: string) =>
+											str.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^[0-9]/, '_$&');
+
 										const registry = getRegistry();
-										console.log(registry);
 										const imports = Object.values(registry.components)
-											.map((block, i) => `import Component${i} from '${block.path}';`)
+											.map((block) => {
+												const id = toIdentifier(block.type);
+												return `import ${id} from '${block.path}';`;
+											})
 											.join('\n');
 
 										const map = Object.values(registry.components)
-											.map((block, i) => `'${block.type}': Component${i}`)
+											.map((block) => {
+												const id = toIdentifier(block.type);
+												return `'${block.type}': ${id}`;
+											})
 											.join(',\n');
 
 										return `${imports}\n\nexport const components = {\n${map}\n};`;
@@ -249,11 +261,11 @@ export function frontmatterComponents({
 
 											const bundledCode = result.outputFiles[0].text;
 											const hash = createHash('md5').update(path).digest('hex');
-											const virtualId = virtual(`virtual:schema:${hash}`);
+											const virtualId = `virtual:schema:${hash}`;
 
-											virtualModules.set(virtualId, { code: bundledCode, realPath: path });
+											virtualModules.set(virtual(virtualId), { code: bundledCode, realPath: path });
 
-											const module = await server.ssrLoadModule('virtual:schema:' + hash);
+											const module = await server.ssrLoadModule(virtualId);
 
 											if (module?.schema) {
 												buildAstroBlock(path, params.logger, getRegistry(), module.schema);
@@ -266,45 +278,45 @@ export function frontmatterComponents({
 					},
 				});
 			},
-
-			// 'astro:server:setup': async ({ server, refreshContent, logger }) => {
-			// 	const registry = getRegistry();
-			// 	server.watcher.on('change', async (path: string) => {
-			// 		// if (!path.endsWith('.astro')) {
-			// 		// 	return;
-			// 		// }
-			// 		// const component = await server.ssrLoadModule(path);
-			//
-			// 		// check if the type is notg entirely new, if not the content cache
-			// 		// does not need to be invalidated
-			// 		// const registry = getRegistry();
-			// 		// if (!buildAstroBlock(path, logger, registry, component.schema)) {
-			// 		// 	return;
-			// 		// }
-			//
-			// 		// BUG: invalidate cache
-			// 		// below is a hack I wrote, I'll be opening up an issue
-			//
-			// 		// let content = await readFile(configPath, 'utf-8');
-			// 		// await writeFile(configPath, content + '\n', 'utf-8');
-			// 		//
-			// 		// server.moduleGraph.invalidateAll();
-			// 		// server.ws.send({
-			// 		// 	type: 'full-reload',
-			// 		// });
-			// 	});
-			//
-			// 	server.watcher.on('unlink', async (path: string) => {
-			// 		if (!path.endsWith('.astro')) {
-			// 			return;
-			// 		}
-			//
-			// 		const type = getType(path);
-			// 		if (type != null) {
-			// 			delete registry[type];
-			// 		}
-			// 	});
-			// },
 		},
 	};
 }
+
+// 'astro:server:setup': async ({ server, refreshContent, logger }) => {
+// 	const registry = getRegistry();
+// 	server.watcher.on('change', async (path: string) => {
+// 		// if (!path.endsWith('.astro')) {
+// 		// 	return;
+// 		// }
+// 		// const component = await server.ssrLoadModule(path);
+//
+// 		// check if the type is notg entirely new, if not the content cache
+// 		// does not need to be invalidated
+// 		// const registry = getRegistry();
+// 		// if (!buildAstroBlock(path, logger, registry, component.schema)) {
+// 		// 	return;
+// 		// }
+//
+// 		// BUG: invalidate cache
+// 		// below is a hack I wrote, I'll be opening up an issue
+//
+// 		// let content = await readFile(configPath, 'utf-8');
+// 		// await writeFile(configPath, content + '\n', 'utf-8');
+// 		//
+// 		// server.moduleGraph.invalidateAll();
+// 		// server.ws.send({
+// 		// 	type: 'full-reload',
+// 		// });
+// 	});
+//
+// 	server.watcher.on('unlink', async (path: string) => {
+// 		if (!path.endsWith('.astro')) {
+// 			return;
+// 		}
+//
+// 		const type = getType(path);
+// 		if (type != null) {
+// 			delete registry[type];
+// 		}
+// 	});
+// },

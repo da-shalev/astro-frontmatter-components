@@ -8,7 +8,15 @@ type Props = {
 const { blocks, callback } = Astro.props;
 
 const registry = getRegistry();
+
+// Dynamically import to ensure registry is fully populated before virtual module evaluates
 const { components } = await import('virtual:astro-frontmatter-components');
+
+const getComponent = import.meta.env.PROD
+	? // Build: pre-generated static imports
+		async (_: string, type: string) => components[type]
+	: // Dev: dynamic imports (always fresh)
+		async (path: string, _: string) => (await import(/* @vite-ignore */ path)).default;
 ---
 
 {
@@ -18,7 +26,10 @@ const { components } = await import('virtual:astro-frontmatter-components');
 		}
 
 		const block = registry.components[props.type];
-		const Component = components[block.type];
+
+		if (!block) return;
+
+		const Component = await getComponent(block.path, block.type);
 		return <Component {...props} />;
 	})
 }
