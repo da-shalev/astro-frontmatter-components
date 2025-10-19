@@ -4,8 +4,7 @@
 	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./integration": "./src/integration.ts",
-    "./renderer": "./src/Frontmatter.astro"
+		"./integration": "./src/integration.ts"
 	},
 	"type": "module",
 	"include": [
