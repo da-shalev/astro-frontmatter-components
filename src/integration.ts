@@ -1,4 +1,5 @@
 import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
+import type { Plugin } from 'vite';
 import { parse } from '@typescript-eslint/typescript-estree';
 import esbuild from 'esbuild';
 import fs from 'fs/promises';
@@ -105,7 +106,7 @@ export function parseBlocks(c: SchemaContext) {
 }
 
 export type AstroFrontmatterComponents = {
-	components: string[];
+	paths: string[];
 };
 
 const NAME: string = 'astro-frontmatter-components';
@@ -114,10 +115,111 @@ const VIRTUAL_SCHEMA_MAP: string = `virtual:astro-frontmatter-schemas:`;
 const virtual = (id: string) => `\0${id}`;
 const isVirtual = (id: string) => id.startsWith('\0');
 
+function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationLogger): Plugin {
+	const virtualModules = new Map();
+	return {
+		name: NAME,
+		resolveId(id, importer) {
+			if (id.startsWith(VIRTUAL_SCHEMA_MAP)) return virtual(id);
+			if (id === VIRTUAL_NAME) return virtual(VIRTUAL_NAME);
+
+			if (importer?.startsWith(virtual(VIRTUAL_SCHEMA_MAP)) && id.startsWith('./')) {
+				const data = virtualModules.get(importer);
+				return data ? resolve(dirname(data.realPath), id) : null;
+			}
+		},
+
+		load(id) {
+			if (isVirtual(id) && id.includes(VIRTUAL_SCHEMA_MAP)) {
+				return virtualModules.get(id)?.code;
+			}
+
+			// Generates static imports for SSR builds.
+			// Dynamic import() of .astro files fails during SSR compilation.
+			// which is why the path from the registry cannot be directly used
+			if (id === virtual(VIRTUAL_NAME)) {
+				const registry = getRegistry();
+				const imports = Object.values(registry.components)
+					.map((block) => {
+						return `import ${block.type} from '${block.path}';`;
+					})
+					.join('\n');
+
+				const map = Object.values(registry.components)
+					.map((block) => {
+						return `'${block.type}': ${block.type}`;
+					})
+					.join(',\n');
+
+				return `${imports}\n\nexport const components = {\n${map}\n};`;
+			}
+		},
+
+		configureServer: {
+			async handler(server) {
+				for (const path of opt.paths) {
+					// TODO: make sure this is more correct
+					const file = await fs.readFile(path, 'utf-8');
+					const parts = file.split('---');
+					const frontmatter = parts[1];
+
+					// TODO: don't fail silently
+					if (!frontmatter) continue;
+
+					const ast = parse(frontmatter, {
+						jsx: true,
+						range: true,
+						comment: true,
+					});
+
+					const imports = ast.body
+						.filter((node) => node.type === 'ImportDeclaration')
+						.map((node) => frontmatter.slice(node.range[0], node.range[1]))
+						.join('\n');
+
+					const schemaExport = ast.body.find((node) => node.type === 'ExportNamedDeclaration');
+
+					// TODO: don't fail silently
+					if (!schemaExport) continue;
+
+					const codeToBundle = `${imports}\n${frontmatter.slice(schemaExport.range[0], schemaExport.range[1])}`;
+
+					const result = await esbuild.build({
+						stdin: {
+							contents: codeToBundle,
+							loader: 'ts',
+							resolveDir: dirname(path),
+						},
+						bundle: true,
+						format: 'esm',
+						write: false,
+						// TODO: mark anything from node_modules as external or maybe everything?
+						external: ['astro:content', '@it-astro:*', '*.astro', 'astro-frontmatter-components'],
+					});
+
+					// TODO: don't fail silently
+					if (!result.outputFiles[0]) continue;
+
+					const bundledCode = result.outputFiles[0].text;
+
+					const hash = createHash('md5').update(path).digest('hex');
+					const virtualId = `${VIRTUAL_SCHEMA_MAP}${hash}`;
+
+					virtualModules.set(virtual(virtualId), { code: bundledCode, realPath: path });
+
+					const module = await server.ssrLoadModule(virtualId);
+
+					if (module?.schema) {
+						buildAstroBlock(path, logger, module.schema);
+					}
+				}
+			},
+		},
+	};
+}
+
 // TODO: improve formatting
-export function frontmatterComponents({
-	components,
-}: AstroFrontmatterComponents): AstroIntegration {
+export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroIntegration {
 	return {
 		name: NAME,
 
@@ -127,118 +229,9 @@ export function frontmatterComponents({
 					name: NAME,
 				});
 
-				const virtualModules = new Map();
-
 				params.updateConfig({
 					vite: {
-						plugins: [
-							{
-								name: NAME,
-								resolveId(id, importer) {
-									if (id.startsWith(VIRTUAL_SCHEMA_MAP)) return virtual(id);
-									if (id === VIRTUAL_NAME) return virtual(VIRTUAL_NAME);
-
-									if (importer?.startsWith(virtual(VIRTUAL_SCHEMA_MAP)) && id.startsWith('./')) {
-										const data = virtualModules.get(importer);
-										return data ? resolve(dirname(data.realPath), id) : null;
-									}
-								},
-
-								load(id) {
-									if (isVirtual(id) && id.includes(VIRTUAL_SCHEMA_MAP)) {
-										return virtualModules.get(id)?.code;
-									}
-
-									// Generates static imports for SSR builds.
-									// Dynamic import() of .astro files fails during SSR compilation.
-									// which is why the path from the registry cannot be directly used
-									if (id === virtual(VIRTUAL_NAME)) {
-										const registry = getRegistry();
-										const imports = Object.values(registry.components)
-											.map((block) => {
-												return `import ${block.type} from '${block.path}';`;
-											})
-											.join('\n');
-
-										const map = Object.values(registry.components)
-											.map((block) => {
-												return `'${block.type}': ${block.type}`;
-											})
-											.join(',\n');
-
-										return `${imports}\n\nexport const components = {\n${map}\n};`;
-									}
-								},
-
-								configureServer: {
-									async handler(server) {
-										for (const path of components) {
-											// TODO: make sure this is more correct
-											const file = await fs.readFile(path, 'utf-8');
-											const parts = file.split('---');
-											const frontmatter = parts[1];
-
-											// TODO: don't fail silently
-											if (!frontmatter) continue;
-
-											const ast = parse(frontmatter, {
-												jsx: true,
-												range: true,
-												comment: true,
-											});
-
-											const imports = ast.body
-												.filter((node) => node.type === 'ImportDeclaration')
-												.map((node) => frontmatter.slice(node.range[0], node.range[1]))
-												.join('\n');
-
-											const schemaExport = ast.body.find(
-												(node) => node.type === 'ExportNamedDeclaration',
-											);
-
-											// TODO: don't fail silently
-											if (!schemaExport) continue;
-
-											const codeToBundle = `${imports}\n${frontmatter.slice(schemaExport.range[0], schemaExport.range[1])}`;
-
-											const result = await esbuild.build({
-												stdin: {
-													contents: codeToBundle,
-													loader: 'ts',
-													resolveDir: dirname(path),
-												},
-												bundle: true,
-												format: 'esm',
-												write: false,
-												// TODO: mark anything from node_modules as external or maybe everything?
-												external: [
-													'astro:content',
-													'@it-astro:*',
-													'*.astro',
-													'astro-frontmatter-components',
-												],
-											});
-
-											// TODO: don't fail silently
-											if (!result.outputFiles[0]) continue;
-
-											const bundledCode = result.outputFiles[0].text;
-
-											const hash = createHash('md5').update(path).digest('hex');
-											const virtualId = `${VIRTUAL_SCHEMA_MAP}${hash}`;
-
-											virtualModules.set(virtual(virtualId), { code: bundledCode, realPath: path });
-
-											const module = await server.ssrLoadModule(virtualId);
-
-											if (module?.schema) {
-												buildAstroBlock(path, params.logger, module.schema);
-											}
-										}
-									},
-								},
-							},
-						],
+						plugins: [mkVitePlugin(opt, params.logger)],
 					},
 				});
 			},
