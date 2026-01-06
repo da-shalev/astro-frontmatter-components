@@ -1,17 +1,20 @@
 import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
 import type { Plugin, ViteDevServer } from 'vite';
-import { parse as parseastro } from '@astrojs/compiler';
-import { parse } from '@babel/parser';
-import { generate } from '@babel/generator';
-import esbuild from 'esbuild';
+import type { SchemaContext } from 'astro:content';
+import { isSchemaBuilder, type SchemaBuilder } from './schema';
 import fs from 'fs/promises';
-import { dirname, resolve } from 'path';
+
+import { dirname } from 'path';
 import { createHash } from 'crypto';
 import { globSync } from 'tinyglobby';
 import { runtimeLogger } from '@inox-tools/runtime-logger';
-import { isSchemaBuilder, type SchemaBuilder } from './schema';
-import type { SchemaContext } from 'astro:content';
 import { z } from 'zod';
+
+import { parse } from '@babel/parser';
+import { parse as parseastro } from '@astrojs/compiler';
+import { generate } from '@babel/generator';
+import type * as babel from '@babel/types';
+import esbuild from 'esbuild';
 
 export type SchemaComponent = {
 	/// The filename used as a UID for the schemas (e.g., 'Hero'), excluding the '.astro' extension.
@@ -22,6 +25,11 @@ export type SchemaComponent = {
 
 	/// The Zod schema builder which creates the data structure for validation.
 	schema: SchemaBuilder;
+};
+
+export type SchemaModule = {
+	code: string;
+	realPath: string;
 };
 
 export type SchemaMeta = z.infer<ReturnType<typeof parseBlocks>>[number];
@@ -118,9 +126,11 @@ const VIRTUAL_NAME_ID: string = `virtual:${NAME}`;
 const VIRTUAL_MAP_ID: string = `${VIRTUAL_NAME_ID}:`;
 const VIRTUAL_MAP: string = toVirtual(VIRTUAL_MAP_ID);
 const VIRTUAL_NAME: string = toVirtual(VIRTUAL_NAME_ID);
+const REQUIRED_EXPORTS = ['schema'];
+const OPTIONAL_EXPORTS = ['seo'];
 
 function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationLogger): Plugin {
-	const virtualModules = new Map();
+	const virtualModules = new Map<string, SchemaModule>();
 
 	async function handler(server: ViteDevServer) {
 		for (const path of opt.paths) {
@@ -130,7 +140,7 @@ function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationL
 			)?.value;
 
 			if (!frontmatter) {
-				console.warn(`No frontmatter found in ${path}. This is bug, report.`);
+				logger.warn(`No frontmatter found in ${path}.`);
 				continue;
 			}
 
@@ -140,20 +150,36 @@ function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationL
 				ranges: true,
 			});
 
-			const schemaExport = ast.program.body.find((node) => node.type === 'ExportNamedDeclaration');
-			if (!schemaExport) {
-				logger.warn(`No schema export found in ${path}`);
+			const getExportNames = (node: babel.Statement) =>
+				node.type === 'ExportNamedDeclaration' && node.declaration?.type === 'VariableDeclaration'
+					? node.declaration.declarations.flatMap((decl) =>
+							decl.id.type === 'Identifier' ? [decl.id.name] : [],
+						)
+					: [];
+
+			const exports = ast.program.body.filter((node) =>
+				getExportNames(node).some((name) =>
+					[...REQUIRED_EXPORTS, ...OPTIONAL_EXPORTS].includes(name),
+				),
+			);
+
+			const missingExports = REQUIRED_EXPORTS.filter(
+				(exp) => !exports.flatMap(getExportNames).includes(exp),
+			);
+
+			if (missingExports.length > 0) {
+				logger.warn(`Missing required exports in ${path}: ${missingExports.join(', ')}`);
 				continue;
 			}
 
-			const imports = ast.program.body
-				.filter((node) => node.type === 'ImportDeclaration')
-				.map((node) => generate(node).code)
-				.join('\n');
-
 			const result = await esbuild.build({
 				stdin: {
-					contents: `${imports}${generate(schemaExport).code}`,
+					contents: [
+						...ast.program.body.filter((node) => node.type === 'ImportDeclaration'),
+						...exports,
+					]
+						.map((node) => generate(node).code)
+						.join('\n'),
 					loader: 'ts',
 					resolveDir: dirname(path),
 				},
@@ -171,6 +197,7 @@ function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationL
 				continue;
 			}
 
+			// runs code using vite resolving all dependences needed only for schema
 			const virtualId = toVirtual(VIRTUAL_MAP_ID + createHash('md5').update(path).digest('hex'));
 
 			virtualModules.set(virtualId, { code: bundledCode, realPath: path });
@@ -185,34 +212,28 @@ function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationL
 	return {
 		name: NAME,
 		resolveId(id, importer) {
+			// build
 			if (id === VIRTUAL_NAME_ID) return VIRTUAL_NAME;
 
-			if (importer && importer.startsWith(VIRTUAL_MAP)) {
-				const data = virtualModules.get(importer);
-				return resolve(dirname(data.realPath), id);
-			}
+			// server
+			if (importer?.startsWith(VIRTUAL_MAP)) return virtualModules.get(importer)?.realPath;
 		},
 
 		load(id) {
+			// dev server
 			if (id.startsWith(VIRTUAL_MAP)) {
 				return virtualModules.get(id)?.code;
 			}
 
+			// build
 			if (id === toVirtual(VIRTUAL_NAME_ID)) {
-				const registry = getRegistry();
-				const imports = Object.values(registry.components)
-					.map((block) => {
-						return `import ${block.type} from '${block.path}';`;
-					})
-					.join('\n');
-
-				const map = Object.values(registry.components)
-					.map((block) => {
-						return `'${block.type}': ${block.type}`;
-					})
-					.join(',\n');
-
-				return `${imports}\n\nexport const components = {\n${map}\n};`;
+				const blocks = Object.values(getRegistry().components);
+				return [
+					...blocks.map((b) => `import ${b.type} from '${b.path}';`),
+					'export default {',
+					...blocks.map((b) => `'${b.type}': ${b.type},`),
+					'};',
+				].join('\n');
 			}
 		},
 
