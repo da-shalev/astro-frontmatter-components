@@ -2,11 +2,23 @@
 	"name": "astro-frontmatter-cms",
 	"version": "0.1.1",
 	"main": "./src/index.ts",
+	"devDependencies": {
+		"@astrojs/ts-plugin": "^1.10.6",
+		"eslint": "^9.39.2",
+		"eslint-plugin-astro": "^1.5.0",
+		"prettier": "^3.7.4",
+		"prettier-plugin-astro": "^0.14.1"
+	},
+	"dependencies": {
+		"tinyglobby": "^0.2.15"
+	},
+	"peerDependencies": {
+		"astro": "^5.16.8"
+	},
 	"exports": {
 		".": "./src/index.ts",
 		"./integration": "./src/integration.ts"
 	},
-	"type": "module",
 	"include": [
 		"env.d.ts",
 		"src/**/*"
@@ -18,17 +30,5 @@
 		"tooling",
 		"utility"
 	],
-	"devDependencies": {
-		"@astrojs/ts-plugin": "^1.10.6",
-		"eslint": "^9.39.2",
-		"eslint-plugin-astro": "^1.5.0",
-		"prettier": "^3.7.4",
-		"prettier-plugin-astro": "^0.14.1"
-	},
-	"peerDependencies": {
-		"astro": "^5.16.8"
-	},
-	"dependencies": {
-		"tinyglobby": "^0.2.15"
-	}
+	"type": "module"
 }

@@ -5,9 +5,10 @@ import { isSchemaBuilder, type SchemaBuilder } from './schema';
 import fs from 'fs/promises';
 
 import { dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
-import { globSync } from 'tinyglobby';
 import { z } from 'zod';
+import { glob } from 'tinyglobby';
 
 import { parse } from '@babel/parser';
 import { parse as parseastro } from '@astrojs/compiler';
@@ -31,10 +32,6 @@ export type SchemaModule = {
 	realPath: string;
 };
 
-export type AstroFrontmatterComponents = {
-	paths: string[];
-};
-
 export type SchemaMeta = z.infer<ReturnType<typeof parseBlocks>>[number];
 
 /**
@@ -56,14 +53,6 @@ export function getRegistry(): SchemaRegistry {
 	return (globalThis.__astroFrontmatterComponentRegistry ??= {
 		components: {},
 		id: Symbol('schema'),
-	});
-}
-
-export function glob(patterns: string | string[]) {
-	return globSync(patterns, {
-		absolute: true,
-		onlyFiles: true,
-		ignore: ['**/node_modules/**'],
 	});
 }
 
@@ -125,10 +114,10 @@ const VIRTUAL_NAME: string = toVirtual(VIRTUAL_NAME_ID);
 const REQUIRED_EXPORTS = ['schema'];
 const OPTIONAL_EXPORTS = ['seo'];
 
-export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroIntegration {
+export function frontmatterComponents(): AstroIntegration {
 	const virtualModules = new Map<string, SchemaModule>();
 
-	function serve(logger: AstroIntegrationLogger): Plugin {
+	function serve(logger: AstroIntegrationLogger, srcDir: string): Plugin {
 		return {
 			name: 'frontmatter-cms-resolver',
 			enforce: 'post',
@@ -149,12 +138,13 @@ export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroInt
 					].join('\n');
 				}
 			},
-			configureServer: {
-				handler: async function (server) {
-					for (const path of opt.paths) {
-						await resolve(path, server, logger);
-					}
-				},
+			configureServer: async function (server) {
+				for (const file of await glob('**/*.astro', {
+					cwd: srcDir,
+					absolute: true,
+				})) {
+					await resolve(file, server, logger);
+				}
 			},
 		};
 	}
@@ -174,7 +164,12 @@ export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroInt
 			sourceType: 'module',
 			plugins: ['typescript', 'jsx'],
 			ranges: true,
+			errorRecovery: true,
 		});
+
+		if (ast.errors && ast.errors.length > 0) {
+			return;
+		}
 
 		const getExportNames = (node: babel.Statement) =>
 			node.type === 'ExportNamedDeclaration' && node.declaration?.type === 'VariableDeclaration'
@@ -189,12 +184,11 @@ export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroInt
 			),
 		);
 
-		const missingExports = REQUIRED_EXPORTS.filter(
+		const requiredExports = REQUIRED_EXPORTS.filter(
 			(exp) => !exports.flatMap(getExportNames).includes(exp),
 		);
 
-		if (missingExports.length > 0) {
-			logger.warn(`Missing required exports in ${realPath}: ${missingExports.join(', ')}`);
+		if (requiredExports.length > 0) {
 			return;
 		}
 
@@ -238,10 +232,10 @@ export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroInt
 		name: NAME,
 
 		hooks: {
-			'astro:config:setup': async ({ logger, updateConfig }) => {
+			'astro:config:setup': async ({ logger, updateConfig, config }) => {
 				updateConfig({
 					vite: {
-						plugins: [serve(logger)],
+						plugins: [serve(logger, fileURLToPath(config.srcDir))],
 					},
 				});
 			},
