@@ -96,7 +96,7 @@ export function parseBlocks(c: SchemaContext) {
 	});
 
 	if (blocks.length == 0) {
-		console.warn('No blocks were initialized. A empty schema will be returned.');
+		console.log('No blocks were initialized. A empty schema will be returned.');
 		return z.array(z.any());
 	}
 
@@ -155,10 +155,7 @@ export function frontmatterComponents(): AstroIntegration {
 			(node) => node.type === 'frontmatter',
 		)?.value;
 
-		if (!frontmatter) {
-			logger.warn(`No frontmatter found in ${realPath}.`);
-			return;
-		}
+		if (!frontmatter) return;
 
 		const ast = parse(frontmatter, {
 			sourceType: 'module',
@@ -212,13 +209,14 @@ export function frontmatterComponents(): AstroIntegration {
 		});
 
 		const code = result.outputFiles[0]?.text;
-		if (!code) {
-			logger.warn(`No output from esbuild for ${realPath}.`);
-			return;
-		}
+		if (!code) return;
 
-		// runs code using vite resolving all dependences needed only for schema
 		const virtualId = toVirtual(VIRTUAL_MAP_ID + createHash('md5').update(realPath).digest('hex'));
+
+		const cachedModule = server.moduleGraph.getModuleById(virtualId);
+		if (cachedModule) {
+			server.moduleGraph.invalidateModule(cachedModule);
+		}
 
 		virtualModules.set(virtualId, { code, realPath });
 		const module = await server.ssrLoadModule(virtualId);
@@ -237,6 +235,61 @@ export function frontmatterComponents(): AstroIntegration {
 					vite: {
 						plugins: [serve(logger, fileURLToPath(config.srcDir))],
 					},
+				});
+			},
+
+			'astro:server:setup': async ({ server, logger }) => {
+				const registry = getRegistry();
+
+				const invalidateModule = () => {
+					const module = server.moduleGraph.getModuleById(VIRTUAL_NAME);
+					if (module) {
+						server.moduleGraph.invalidateModule(module);
+					}
+				};
+
+				server.watcher.on('add', async (file) => {
+					if (!file.endsWith('.astro')) {
+						return;
+					}
+
+					await resolve(file, server, logger);
+					invalidateModule();
+					server.ws.send({ type: 'full-reload' });
+				});
+
+				server.watcher.on('change', async (file) => {
+					if (!file.endsWith('.astro')) {
+						return;
+					}
+
+					const existingType = Object.keys(registry.components).find(
+						(type) => registry.components[type]?.path === file,
+					);
+
+					if (existingType) {
+						logger.info(`Updating schema: ${existingType}`);
+						delete registry.components[existingType];
+					}
+
+					await resolve(file, server, logger);
+					invalidateModule();
+				});
+
+				server.watcher.on('unlink', async (file) => {
+					if (!file.endsWith('.astro')) {
+						return;
+					}
+
+					const existingType = Object.keys(registry.components).find(
+						(type) => registry.components[type]?.path === file,
+					);
+
+					if (existingType) {
+						logger.info(`Removed schema: ${existingType}`);
+						delete registry.components[existingType];
+						invalidateModule();
+					}
 				});
 			},
 		},
