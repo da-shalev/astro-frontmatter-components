@@ -1,6 +1,7 @@
 /// <reference types="astro/client" />
 
-declare module 'virtual:astro-frontmatter-components' {
+declare module 'virtual:astro-frontmatter-cms' {
 	import type { AstroComponentFactory } from 'astro/runtime/server/index.js';
-	export const components: Record<string, AstroComponentFactory>;
+	const components: Record<string, AstroComponentFactory>;
+	export default components;
 }

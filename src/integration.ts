@@ -1,17 +1,19 @@
 import type { AstroIntegration, AstroIntegrationLogger } from 'astro';
 import type { Plugin, ViteDevServer } from 'vite';
-import { parse as parseastro } from '@astrojs/compiler';
-import { parse } from '@babel/parser';
-import { generate } from '@babel/generator';
-import esbuild from 'esbuild';
+import type { SchemaContext } from 'astro:content';
+import { isSchemaBuilder, type SchemaBuilder } from './schema';
 import fs from 'fs/promises';
-import { dirname, resolve } from 'path';
+
+import { dirname } from 'path';
 import { createHash } from 'crypto';
 import { globSync } from 'tinyglobby';
-import { runtimeLogger } from '@inox-tools/runtime-logger';
-import { isSchemaBuilder, type SchemaBuilder } from './schema';
-import type { SchemaContext } from 'astro:content';
 import { z } from 'zod';
+
+import { parse } from '@babel/parser';
+import { parse as parseastro } from '@astrojs/compiler';
+import { generate } from '@babel/generator';
+import type * as babel from '@babel/types';
+import esbuild from 'esbuild';
 
 export type SchemaComponent = {
 	/// The filename used as a UID for the schemas (e.g., 'Hero'), excluding the '.astro' extension.
@@ -22,6 +24,15 @@ export type SchemaComponent = {
 
 	/// The Zod schema builder which creates the data structure for validation.
 	schema: SchemaBuilder;
+};
+
+export type SchemaModule = {
+	code: string;
+	realPath: string;
+};
+
+export type AstroFrontmatterComponents = {
+	paths: string[];
 };
 
 export type SchemaMeta = z.infer<ReturnType<typeof parseBlocks>>[number];
@@ -56,10 +67,7 @@ export function glob(patterns: string | string[]) {
 	});
 }
 
-/**
- * @returns boolean - if the type is new to the registry
- */
-function buildAstroBlock(path: string, logger: AstroIntegrationLogger, schema?: unknown) {
+function constructSchema(path: string, logger: AstroIntegrationLogger, schema?: unknown) {
 	const registry = getRegistry();
 	if (!isSchemaBuilder(schema, registry)) {
 		logger.error(
@@ -107,178 +115,136 @@ export function parseBlocks(c: SchemaContext) {
 	return z.array(z.discriminatedUnion('type', [first!, ...rest!]));
 }
 
-export type AstroFrontmatterComponents = {
-	paths: string[];
-};
-
 const toVirtual = (id: string) => `\0${id}`;
 
-const NAME: string = 'astro-frontmatter-components';
+const NAME: string = 'astro-frontmatter-cms';
 const VIRTUAL_NAME_ID: string = `virtual:${NAME}`;
 const VIRTUAL_MAP_ID: string = `${VIRTUAL_NAME_ID}:`;
 const VIRTUAL_MAP: string = toVirtual(VIRTUAL_MAP_ID);
 const VIRTUAL_NAME: string = toVirtual(VIRTUAL_NAME_ID);
+const REQUIRED_EXPORTS = ['schema'];
+const OPTIONAL_EXPORTS = ['seo'];
 
-function mkVitePlugin(opt: AstroFrontmatterComponents, logger: AstroIntegrationLogger): Plugin {
-	const virtualModules = new Map();
+export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroIntegration {
+	const virtualModules = new Map<string, SchemaModule>();
 
-	async function handler(server: ViteDevServer) {
-		for (const path of opt.paths) {
-			const file = await fs.readFile(path, 'utf-8');
-			const frontmatter = (await parseastro(file)).ast.children?.find(
-				(node) => node.type === 'frontmatter',
-			)?.value;
+	function serve(logger: AstroIntegrationLogger): Plugin {
+		return {
+			name: 'frontmatter-cms-resolver',
+			enforce: 'post',
+			resolveId(id, importer) {
+				if (id === VIRTUAL_NAME_ID) return VIRTUAL_NAME;
+				if (importer?.startsWith(VIRTUAL_MAP)) return virtualModules.get(importer)?.realPath;
+			},
 
-			if (!frontmatter) {
-				console.warn(`No frontmatter found in ${path}. This is bug, report.`);
-				continue;
-			}
-
-			const ast = parse(frontmatter, {
-				sourceType: 'module',
-				plugins: ['typescript', 'jsx'],
-				ranges: true,
-			});
-
-			const schemaExport = ast.program.body.find((node) => node.type === 'ExportNamedDeclaration');
-			if (!schemaExport) {
-				logger.warn(`No schema export found in ${path}`);
-				continue;
-			}
-
-			const imports = ast.program.body
-				.filter((node) => node.type === 'ImportDeclaration')
-				.map((node) => generate(node).code)
-				.join('\n');
-
-			const result = await esbuild.build({
-				stdin: {
-					contents: `${imports}${generate(schemaExport).code}`,
-					loader: 'ts',
-					resolveDir: dirname(path),
+			load(id) {
+				if (id.startsWith(VIRTUAL_MAP)) return virtualModules.get(id)?.code;
+				if (id === VIRTUAL_NAME) {
+					const blocks = Object.values(getRegistry().components);
+					return [
+						...blocks.map((b) => `import ${b.type} from '${b.path}';`),
+						'export default {',
+						...blocks.map((b) => `'${b.type}': ${b.type},`),
+						'};',
+					].join('\n');
+				}
+			},
+			configureServer: {
+				handler: async function (server) {
+					for (const path of opt.paths) {
+						await resolve(path, server, logger);
+					}
 				},
-				bundle: true,
-				format: 'esm',
-				write: false,
-				minify: true,
-				packages: 'external',
-				external: ['*.astro'],
-			});
+			},
+		};
+	}
 
-			const bundledCode = result.outputFiles[0]?.text;
-			if (!bundledCode) {
-				logger.warn(`No output from esbuild for ${path}.`);
-				continue;
-			}
+	async function resolve(realPath: string, server: ViteDevServer, logger: AstroIntegrationLogger) {
+		const file = await fs.readFile(realPath, 'utf-8');
+		const frontmatter = (await parseastro(file)).ast.children?.find(
+			(node) => node.type === 'frontmatter',
+		)?.value;
 
-			const virtualId = toVirtual(VIRTUAL_MAP_ID + createHash('md5').update(path).digest('hex'));
+		if (!frontmatter) {
+			logger.warn(`No frontmatter found in ${realPath}.`);
+			return;
+		}
 
-			virtualModules.set(virtualId, { code: bundledCode, realPath: path });
-			const module = await server.ssrLoadModule(virtualId);
+		const ast = parse(frontmatter, {
+			sourceType: 'module',
+			plugins: ['typescript', 'jsx'],
+			ranges: true,
+		});
 
-			if (module?.schema) {
-				buildAstroBlock(path, logger, module.schema);
-			}
+		const getExportNames = (node: babel.Statement) =>
+			node.type === 'ExportNamedDeclaration' && node.declaration?.type === 'VariableDeclaration'
+				? node.declaration.declarations.flatMap((decl) =>
+						decl.id.type === 'Identifier' ? [decl.id.name] : [],
+					)
+				: [];
+
+		const exports = ast.program.body.filter((node) =>
+			getExportNames(node).some((name) =>
+				[...REQUIRED_EXPORTS, ...OPTIONAL_EXPORTS].includes(name),
+			),
+		);
+
+		const missingExports = REQUIRED_EXPORTS.filter(
+			(exp) => !exports.flatMap(getExportNames).includes(exp),
+		);
+
+		if (missingExports.length > 0) {
+			logger.warn(`Missing required exports in ${realPath}: ${missingExports.join(', ')}`);
+			return;
+		}
+
+		const result = await esbuild.build({
+			stdin: {
+				contents: [
+					...ast.program.body.filter((node) => node.type === 'ImportDeclaration'),
+					...exports,
+				]
+					.map((node) => generate(node).code)
+					.join('\n'),
+				loader: 'ts',
+				resolveDir: dirname(realPath),
+			},
+			bundle: true,
+			format: 'esm',
+			write: false,
+			minify: true,
+			packages: 'external',
+			external: ['*.astro'],
+		});
+
+		const code = result.outputFiles[0]?.text;
+		if (!code) {
+			logger.warn(`No output from esbuild for ${realPath}.`);
+			return;
+		}
+
+		// runs code using vite resolving all dependences needed only for schema
+		const virtualId = toVirtual(VIRTUAL_MAP_ID + createHash('md5').update(realPath).digest('hex'));
+
+		virtualModules.set(virtualId, { code, realPath });
+		const module = await server.ssrLoadModule(virtualId);
+
+		if (module?.schema) {
+			constructSchema(realPath, logger, module.schema);
 		}
 	}
 
 	return {
 		name: NAME,
-		resolveId(id, importer) {
-			if (id === VIRTUAL_NAME_ID) return VIRTUAL_NAME;
-
-			if (importer && importer.startsWith(VIRTUAL_MAP)) {
-				const data = virtualModules.get(importer);
-				return resolve(dirname(data.realPath), id);
-			}
-		},
-
-		load(id) {
-			if (id.startsWith(VIRTUAL_MAP)) {
-				return virtualModules.get(id)?.code;
-			}
-
-			if (id === toVirtual(VIRTUAL_NAME_ID)) {
-				const registry = getRegistry();
-				const imports = Object.values(registry.components)
-					.map((block) => {
-						return `import ${block.type} from '${block.path}';`;
-					})
-					.join('\n');
-
-				const map = Object.values(registry.components)
-					.map((block) => {
-						return `'${block.type}': ${block.type}`;
-					})
-					.join(',\n');
-
-				return `${imports}\n\nexport const components = {\n${map}\n};`;
-			}
-		},
-
-		configureServer: {
-			handler,
-		},
-	};
-}
-
-// TODO: improve formatting
-export function frontmatterComponents(opt: AstroFrontmatterComponents): AstroIntegration {
-	return {
-		name: NAME,
 
 		hooks: {
-			'astro:config:setup': async (params) => {
-				runtimeLogger(params, {
-					name: NAME,
-				});
-
-				params.updateConfig({
+			'astro:config:setup': async ({ logger, updateConfig }) => {
+				updateConfig({
 					vite: {
-						plugins: [mkVitePlugin(opt, params.logger)],
+						plugins: [serve(logger)],
 					},
 				});
 			},
 		},
 	};
 }
-
-// TODO: this
-// 'astro:server:setup': async ({ server, refreshContent, logger }) => {
-// 	const registry = getRegistry();
-// 	server.watcher.on('change', async (path: string) => {
-// 		// if (!path.endsWith('.astro')) {
-// 		// 	return;
-// 		// }
-// 		// const component = await server.ssrLoadModule(path);
-//
-// 		// check if the type is notg entirely new, if not the content cache
-// 		// does not need to be invalidated
-// 		// const registry = getRegistry();
-// 		// if (!buildAstroBlock(path, logger, registry, component.schema)) {
-// 		// 	return;
-// 		// }
-//
-// 		// BUG: invalidate cache
-// 		// below is a hack I wrote, I'll be opening up an issue
-//
-// 		// let content = await readFile(configPath, 'utf-8');
-// 		// await writeFile(configPath, content + '\n', 'utf-8');
-// 		//
-// 		// server.moduleGraph.invalidateAll();
-// 		// server.ws.send({
-// 		// 	type: 'full-reload',
-// 		// });
-// 	});
-//
-// 	server.watcher.on('unlink', async (path: string) => {
-// 		if (!path.endsWith('.astro')) {
-// 			return;
-// 		}
-//
-// 		const type = getType(path);
-// 		if (type != null) {
-// 			delete registry[type];
-// 		}
-// 	});
-// },

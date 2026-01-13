@@ -5,31 +5,24 @@ type Props = {
 	blocks?: SchemaMeta[];
 	callback?: (data: SchemaMeta, i: number) => void;
 };
+
 const { blocks, callback } = Astro.props;
-
 const registry = getRegistry();
-
-// Dynamically import to ensure registry is fully populated before virtual module evaluates
-const { components } = await import('virtual:astro-frontmatter-components');
-
-const getComponent = import.meta.env.PROD
-	? // Build: pre-generated static imports
-		async (_: string, type: string) => components[type]
-	: // Dev: dynamic imports (always fresh)
-		async (path: string, _: string) => (await import(/* @vite-ignore */ path)).default;
+const components = (await import('virtual:astro-frontmatter-cms')).default;
 ---
 
 {
 	blocks?.map(async (props, i) => {
-		if (callback) {
-			callback(props, i);
-		}
-
+		if (callback) callback(props, i);
 		const block = registry.components[props.type];
-
 		if (!block) return;
 
-		const Component = await getComponent(block.path, block.type);
-		return <Component {...props} />;
+		const Component = components[block.type];
+
+		if (Component == null) {
+			return <div>Unable to resolve frontmatter component</div>;
+		} else {
+			return <Component {...props} />;
+		}
 	})
 }
