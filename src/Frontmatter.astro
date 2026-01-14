@@ -1,5 +1,5 @@
 ---
-import { getRegistry, type SchemaMeta } from './integration';
+import { type SchemaMeta } from './integration';
 
 type Props = {
 	blocks?: SchemaMeta[];
@@ -7,17 +7,13 @@ type Props = {
 };
 
 const { blocks, callback } = Astro.props;
-const registry = getRegistry();
 const components = (await import('virtual:astro-frontmatter-cms')).default;
 ---
 
 {
 	blocks?.map(async (props, i) => {
 		if (callback) callback(props, i);
-		const block = registry.components[props.type];
-		if (!block) return;
-
-		const Component = components[block.type];
+		const Component = components[props.type];
 
 		if (Component == null) {
 			return <div>Unable to resolve frontmatter component</div>;

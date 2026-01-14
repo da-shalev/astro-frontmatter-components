@@ -9,14 +9,10 @@ export const sanitizeType = (str: string) =>
 export function queryBlocks<T extends SchemaBuilder>(
 	blocks: SchemaMeta[] | undefined | never[],
 	schema: T,
-): (SchemaOf<T> & SchemaMeta)[] {
-	if (!blocks || blocks.length === 0) {
-		return [];
-	}
-
-	return blocks.filter(
-		(block): block is SchemaOf<T> & SchemaMeta => block.type === schema.type,
-	) as (SchemaOf<T> & SchemaMeta)[];
+): SchemaOf<T>[] {
+	return (blocks ?? []).filter(
+		(block): block is SchemaOf<T> => block.type === schema.type,
+	);
 }
 
 /**
@@ -25,25 +21,25 @@ export function queryBlocks<T extends SchemaBuilder>(
  * @template T
  * @returns The inferred TypeScript type from the block's schema
  */
-export type SchemaOf<T extends SchemaBuilder> = z.infer<z.ZodObject<ReturnType<T>>>;
+export type SchemaOf<T extends SchemaBuilder> = z.infer<ReturnType<T>>;
 
 /**
- * A function that builds a Zod schema shape for a specific context.
+ * A function that builds a Zod schema for a specific context.
  */
-export interface SchemaBuilder {
-	(c: SchemaContext): z.ZodRawShape;
+export interface SchemaBuilder<T extends z.AnyZodObject = z.AnyZodObject> {
+	(c: SchemaContext): T;
 	type: string;
 	_registryId: symbol;
 }
 
-export function createSchema<T extends z.ZodRawShape>(
+export function createSchema<T extends z.AnyZodObject>(
 	type: string,
 	builder: (c: SchemaContext) => T,
-): SchemaBuilder & ((c: SchemaContext) => T) {
-	return Object.assign(builder, {
-		type: sanitizeType(type),
-		_registryId: getRegistry().id,
-	});
+): SchemaBuilder<T> {
+	const result = builder as SchemaBuilder<T>;
+	result.type = sanitizeType(type);
+	result._registryId = getRegistry().id;
+	return result;
 }
 
 export function isSchemaBuilder(schema: any, registry: SchemaRegistry): schema is SchemaBuilder {

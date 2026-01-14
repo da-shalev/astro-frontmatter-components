@@ -46,11 +46,11 @@ export interface SchemaRegistry {
 }
 
 declare global {
-	var __astroFrontmatterComponentRegistry: SchemaRegistry | undefined;
+	var __astroFrontmatterCMSRegistry: SchemaRegistry | undefined;
 }
 
 export function getRegistry(): SchemaRegistry {
-	return (globalThis.__astroFrontmatterComponentRegistry ??= {
+	return (globalThis.__astroFrontmatterCMSRegistry ??= {
 		components: {},
 		id: Symbol('schema'),
 	});
@@ -89,9 +89,8 @@ function constructSchema(path: string, logger: AstroIntegrationLogger, schema?: 
 export function parseBlocks(c: SchemaContext) {
 	const registry = getRegistry();
 	const blocks = Object.values(registry.components).map((block) => {
-		return z.object({
+		return block.schema(c).extend({
 			type: z.literal(block.type),
-			...block.schema(c),
 		});
 	});
 
@@ -115,6 +114,7 @@ const REQUIRED_EXPORTS = ['schema'];
 const OPTIONAL_EXPORTS = ['seo'];
 
 export function frontmatterComponents(): AstroIntegration {
+	const registry = getRegistry();
 	const virtualModules = new Map<string, SchemaModule>();
 
 	function serve(logger: AstroIntegrationLogger, srcDir: string): Plugin {
@@ -129,7 +129,7 @@ export function frontmatterComponents(): AstroIntegration {
 			load(id) {
 				if (id.startsWith(VIRTUAL_MAP)) return virtualModules.get(id)?.code;
 				if (id === VIRTUAL_NAME) {
-					const blocks = Object.values(getRegistry().components);
+					const blocks = Object.values(registry.components);
 					return [
 						...blocks.map((b) => `import ${b.type} from '${b.path}';`),
 						'export default {',
@@ -239,8 +239,6 @@ export function frontmatterComponents(): AstroIntegration {
 			},
 
 			'astro:server:setup': async ({ server, logger }) => {
-				const registry = getRegistry();
-
 				const invalidateModule = () => {
 					const module = server.moduleGraph.getModuleById(VIRTUAL_NAME);
 					if (module) {
