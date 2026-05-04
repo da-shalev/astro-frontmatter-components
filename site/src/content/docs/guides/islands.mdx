@@ -1,0 +1,82 @@
+---
+title: Islands
+description: Passing block data to interactive framework components.
+---
+
+Blocks are Astro components, so they render as static HTML by default. To add interactivity, pass block data into framework islands (React, Solid, Svelte, etc.) using Astro's `client:*` directives.
+
+## Basic pattern
+
+```astro title="src/sections/Gallery.astro"
+---
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+import GalleryIsland from '@/components/GalleryIsland';
+
+export const schema = createSchema('Gallery', (c: SchemaContext) =>
+	z.object({
+		images: z.array(c.image()),
+	}),
+);
+
+// export Props for island components to import
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<GalleryIsland client:visible images={meta.images} />
+```
+
+The key is `export type Props` - this is why we export it rather than keeping it local. Your island component can import the type directly:
+
+```tsx title="src/components/GalleryIsland.tsx"
+import type { Props as GalleryProps } from '@/sections/Gallery.astro';
+
+export default function GalleryIsland(props: GalleryProps) {
+	return (
+		<div class="gallery">
+			{props.images.map((img) => (
+				<img src={img.src} />
+			))}
+		</div>
+	);
+}
+```
+
+Note the `import type` - this is required. A regular `import` from an `.astro` file will try to import the component's runtime module, which doesn't exist in a framework context and will break your build. `import type` only pulls in the TypeScript type and is erased at compile time.
+
+The island's props stay in sync with the schema - if you add a field to the block schema, the island type updates automatically.
+
+## Partial props
+
+You don't have to pass the entire `meta` object. Pass only what the island needs:
+
+```astro title="src/sections/Faq.astro"
+---
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+import Accordion from '@/components/Accordion';
+
+export const schema = createSchema('Faq', (_: SchemaContext) =>
+	z.object({
+		heading: z.string(),
+		content: z.array(
+			z.object({
+				question: z.string(),
+				answer: z.string(),
+			}),
+		),
+	}),
+);
+
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<section>
+	<h2>{meta.heading}</h2>
+	<Accordion client:load content={meta.content} />
+</section>
+```
+
+Here the heading renders as static HTML while only the interactive accordion is hydrated on the client.

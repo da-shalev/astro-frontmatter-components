@@ -1,0 +1,108 @@
+---
+title: Quick Start
+description: Build your first content block in under 5 minutes.
+---
+
+This guide walks through creating a block component, wiring it into a content collection, and rendering it on a page.
+
+## 1. Create a block component
+
+Create an Astro component that exports a schema:
+
+```astro title="src/sections/Feature.astro"
+---
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+
+export const schema = createSchema('Feature', (_: SchemaContext) =>
+	z.object({
+		title: z.string(),
+		description: z.string(),
+		icon: z.string().optional(),
+	}),
+);
+
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<div class="feature">
+	{meta.icon && <span class="icon">{meta.icon}</span>}
+	<h3>{meta.title}</h3>
+	<p>{meta.description}</p>
+</div>
+```
+
+The first argument to `createSchema` is the block's type identifier - this is what you'll use in frontmatter.
+
+## 2. Define your content collection
+
+Use `parseBlocks` in your collection schema to validate the blocks array:
+
+```ts title="src/content.config.ts"
+import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+import { parseBlocks } from 'astro-frontmatter-cms/integration';
+
+const pages = defineCollection({
+	loader: glob({ pattern: '**/*.mdx', base: './src/content/pages' }),
+	schema: (c) =>
+		z.object({
+			title: z.string(),
+			blocks: parseBlocks(c),
+		}),
+});
+
+export const collections = { pages };
+```
+
+`parseBlocks` returns a Zod array of a discriminated union over all registered block types.
+
+## 3. Write content
+
+```yaml title="src/content/pages/home.mdx"
+---
+title: Home
+blocks:
+  - type: Feature
+    title: Fast
+    description: Built on Astro's content layer.
+    icon: '⚡'
+  - type: Feature
+    title: Type-safe
+    description: Full Zod validation and IDE completions.
+    icon: '🔒'
+---
+```
+
+If you mistype a field or pass the wrong type, you'll get a validation error at build time - not a broken page in production.
+
+## 4. Render blocks
+
+Use the `Frontmatter` component to render the blocks array:
+
+```astro title="src/pages/[...slug].astro"
+---
+import { getCollection } from 'astro:content';
+import { Frontmatter } from 'astro-frontmatter-cms';
+
+export async function getStaticPaths() {
+	const pages = await getCollection('pages');
+	return pages.map((page) => ({
+		params: { slug: page.id },
+		props: page,
+	}));
+}
+
+const { data } = Astro.props;
+---
+
+<html>
+	<body>
+		<h1>{data.title}</h1>
+		<Frontmatter blocks={data.blocks} />
+	</body>
+</html>
+```
+
+`Frontmatter` resolves each block's `type` to the corresponding component and spreads the validated props into it. That's all there is to it.

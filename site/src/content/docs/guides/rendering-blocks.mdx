@@ -1,0 +1,65 @@
+---
+title: Rendering Blocks
+description: How to render frontmatter blocks on your pages.
+---
+
+The `Frontmatter` component takes a `blocks` array and renders each one by resolving its `type` to the registered component.
+
+## Basic rendering
+
+```astro
+---
+import { Frontmatter } from 'astro-frontmatter-cms';
+
+const { data } = Astro.props;
+---
+
+<Frontmatter blocks={data.blocks} />
+```
+
+Each block's validated props are spread into the matching component. If a block's `type` doesn't match any registered component, a fallback `<div>` is rendered with an error message.
+
+## Using the callback
+
+The `callback` prop lets you mutate block data before each block renders. The main use case is injecting layout-level state into blocks - things that depend on a block's position in the page rather than its own content.
+
+For example, alternating left/right alignment across blocks:
+
+```astro title="src/layouts/Root.astro"
+---
+import { Frontmatter } from 'astro-frontmatter-cms';
+
+const { data } = Astro.props;
+let align = false;
+---
+
+<Frontmatter
+	blocks={data.blocks}
+	callback={(block) => {
+		if ('align' in block) {
+			block.align = align ? 'right' : 'left';
+			align = !align;
+		}
+	}}
+/>
+```
+
+Blocks that include an `align` field in their schema get assigned an alternating position by the layout. The block doesn't need to know where it sits on the page.
+
+## Manual rendering
+
+If you need full control over layout, you can skip the `Frontmatter` component and render blocks yourself using `queryBlocks`:
+
+```astro
+---
+import { queryBlocks } from 'astro-frontmatter-cms';
+import Hero, { schema } from '@/sections/Hero.astro';
+
+const { data } = Astro.props;
+const heroes = queryBlocks(data.blocks, schema);
+---
+
+{heroes.map((hero) => <Hero {...hero} />)}
+```
+
+See [Querying Blocks](/guides/querying-blocks/) for more on this approach.

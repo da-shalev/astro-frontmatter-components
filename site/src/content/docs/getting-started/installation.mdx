@@ -1,0 +1,46 @@
+---
+title: Installation
+description: Add Frontmatter CMS to your Astro project.
+---
+
+## Prerequisites
+
+- Astro v5.16.8 or later
+- A project using [content collections](https://docs.astro.build/en/guides/content-collections/)
+
+## Install the package
+
+```bash
+bun add astro-frontmatter-cms
+```
+
+## Add the integration
+
+Add `frontmatterComponents` to your Astro config:
+
+```js title="astro.config.mjs"
+import { defineConfig } from 'astro/config';
+import { frontmatterComponents } from 'astro-frontmatter-cms/integration';
+
+export default defineConfig({
+	integrations: [frontmatterComponents()],
+});
+```
+
+## TypeScript plugin
+
+Install `@astrojs/ts-plugin` so TypeScript can resolve types from `.astro` imports in `.ts` files - like importing `Props` from a section component into an island:
+
+```bash
+bun add -d @astrojs/ts-plugin
+```
+
+```json title="tsconfig.json"
+{
+	"compilerOptions": {
+		"plugins": [{ "name": "@astrojs/ts-plugin" }]
+	}
+}
+```
+
+That's it. The integration will automatically discover any Astro components that export a `schema` created with `createSchema`.

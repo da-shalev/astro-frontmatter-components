@@ -1,0 +1,56 @@
+---
+title: Querying Blocks
+description: Filter and extract specific block types from a blocks array.
+---
+
+`queryBlocks` filters a blocks array to only items matching a specific schema. Useful for pulling out specific blocks for special handling.
+
+## Basic usage
+
+```astro
+---
+import { queryBlocks } from 'astro-frontmatter-cms';
+import { schema } from '@/sections/Hero.astro';
+
+const { data } = Astro.props;
+const heroes = queryBlocks(data.blocks, schema);
+---
+
+{
+	heroes.map((hero) => (
+		<section>
+			<h1>{hero.heading}</h1>
+		</section>
+	))
+}
+```
+
+`queryBlocks` matches on the `type` field and returns a typed array - you get full autocomplete on the result.
+
+## Layout zones
+
+A common pattern is splitting blocks into different page regions:
+
+```astro
+---
+import { queryBlocks, Frontmatter } from 'astro-frontmatter-cms';
+import { schema as seoSchema } from '@/sections/SEO.astro';
+import { schema as heroSchema } from '@/sections/Hero.astro';
+
+const { data } = Astro.props;
+const [seo] = queryBlocks(data.blocks, seoSchema);
+const [hero] = queryBlocks(data.blocks, heroSchema);
+---
+
+<html>
+	<head>
+		{seo && <meta name="description" content={seo.description} />}
+	</head>
+	<body>
+		{hero && <Hero {...hero} />}
+		<main>
+			<Frontmatter blocks={data.blocks} />
+		</main>
+	</body>
+</html>
+```

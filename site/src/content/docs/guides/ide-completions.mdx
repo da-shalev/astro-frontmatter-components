@@ -1,0 +1,36 @@
+---
+title: IDE Completions
+description: Get autocompletions and validation for your content files in VS Code.
+---
+
+Astro generates JSON schemas for your content collections to `.astro/collections/`. These include your block types, so your editor can autocomplete `type` values, block fields, and validate inline.
+
+## VS Code setup
+
+Install the [YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml), then map the generated schemas to your content files:
+
+```json title=".vscode/settings.json"
+{
+	"yaml.schemas": {
+		"./.astro/collections/pages.schema.json": ["content/pages/**/*.yaml"]
+	}
+}
+```
+
+Add an entry per collection. The key is the generated schema path, the value is a glob matching your content files.
+
+Schemas are generated during `astro dev` and `astro build` - run the dev server at least once so the `.astro/collections/` directory exists.
+
+## Inline per file
+
+You can also add a modeline at the top of a YAML file to point it at the schema directly, without any `.vscode/settings.json` config:
+
+```yaml title="content/pages/home.yaml"
+# yaml-language-server: $schema=../../.astro/collections/pages.schema.json
+title: Home
+blocks:
+  - type: Hero
+    heading: Welcome
+```
+
+The path is relative to the file. This is useful for one-off files or if you don't want project-wide settings.

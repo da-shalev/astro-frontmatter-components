@@ -10,9 +10,7 @@ export function queryBlocks<T extends SchemaBuilder>(
 	blocks: SchemaMeta[] | undefined | never[],
 	schema: T,
 ): SchemaOf<T>[] {
-	return (blocks ?? []).filter(
-		(block): block is SchemaOf<T> => block.type === schema.type,
-	);
+	return (blocks ?? []).filter((block): block is SchemaOf<T> => block.type === schema.type);
 }
 
 /**

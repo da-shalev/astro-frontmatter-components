@@ -1,0 +1,22 @@
+{
+	"name": "astro-frontmatter-cms-site",
+	"type": "module",
+	"version": "0.0.1",
+	"scripts": {
+		"dev": "astro dev",
+		"start": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"astro": "astro",
+		"format": "prettier --write \"**/*.{ts,tsx,astro,mdx,md,mjs,json}\""
+	},
+	"dependencies": {
+		"@astrojs/starlight": "^0.38.1",
+		"astro": "^6.0.1",
+		"sharp": "^0.34.2"
+	},
+	"devDependencies": {
+		"prettier": "^3.8.1",
+		"prettier-plugin-astro": "^0.14.1"
+	}
+}

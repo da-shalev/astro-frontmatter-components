@@ -1,0 +1,66 @@
+---
+title: Introduction
+description: What Frontmatter CMS is and why you'd use it.
+---
+
+Frontmatter CMS is an Astro integration that lets you define structured, validated content blocks directly in your frontmatter. Each block is an Astro component paired with a Zod schema - you get full type safety, IDE completions, and validation for your content, with zero external infrastructure.
+
+## The problem
+
+Astro's content collections give you typed frontmatter, but the schema is defined separately from the components that render it. If you want component-driven layouts (hero sections, feature grids, CTAs), you either:
+
+- Use MDX and lose validation/completions on component props
+- Use a headless CMS for structured blocks but add infrastructure and vendor lock-in
+- Manually wire up Zod schemas to components and keep them in sync yourself
+
+## The solution
+
+With Frontmatter CMS, you export a `schema` directly from your Astro component. The integration discovers it automatically, registers it, and makes it available for content collection validation.
+
+```astro
+---
+// src/sections/Hero.astro
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+
+export const schema = createSchema('Hero', (c: SchemaContext) =>
+	z.object({
+		heading: z.string(),
+		subheading: z.string().optional(),
+		background: c.image(),
+	}),
+);
+
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<section>
+	<h1>{meta.heading}</h1>
+	{meta.subheading && <p>{meta.subheading}</p>}
+</section>
+```
+
+Then in your content:
+
+```yaml
+---
+title: My Page
+blocks:
+  - type: Hero
+    heading: Welcome
+    subheading: This is validated and autocompleted.
+    background: ./hero.jpg
+---
+```
+
+The `type` field maps to the schema name. Validation, completions, and type narrowing all work automatically.
+
+## Key features
+
+- **Co-located schemas** - Schema lives in the same file as the component that renders it
+- **Zod validation** - Full Zod support including Astro's `image()` helper
+- **IDE completions** - Your editor knows the shape of every block type
+- **Discriminated unions** - Blocks are validated as a discriminated union on `type`, so TypeScript narrows correctly
+- **Zero infrastructure** - Git-native, no external services
+- **HMR support** - Add, edit, or remove block components and the registry updates live

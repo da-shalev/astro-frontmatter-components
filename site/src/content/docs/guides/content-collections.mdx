@@ -1,0 +1,76 @@
+---
+title: Content Collections
+description: Integrating blocks with Astro's content collections.
+---
+
+Frontmatter CMS is designed to work with Astro's content collections. The `parseBlocks` function generates a Zod schema that validates your blocks array against all registered block types.
+
+## Setting up the schema
+
+```ts title="src/content.config.ts"
+import { defineCollection, z } from 'astro:content';
+import { glob } from 'astro/loaders';
+import { parseBlocks } from 'astro-frontmatter-cms/integration';
+
+const pages = defineCollection({
+	loader: glob({ pattern: '**/*.mdx', base: './src/content/pages' }),
+	schema: (c) =>
+		z.object({
+			title: z.string(),
+			description: z.string().optional(),
+			blocks: parseBlocks(c),
+		}),
+});
+
+export const collections = { pages };
+```
+
+`parseBlocks` accepts the `SchemaContext` that Astro passes to your schema function. This is required for features like `image()` to work inside block schemas.
+
+## How validation works
+
+`parseBlocks` builds a `z.discriminatedUnion` on the `type` field across all registered blocks. Given blocks `Hero`, `Feature`, and `CTA`, the resulting schema is equivalent to:
+
+```ts
+z.array(
+	z.discriminatedUnion('type', [
+		heroSchema.extend({ type: z.literal('Hero') }),
+		featureSchema.extend({ type: z.literal('Feature') }),
+		ctaSchema.extend({ type: z.literal('CTA') }),
+	]),
+);
+```
+
+This means:
+
+- Unknown `type` values fail validation
+- Each block is validated against its specific schema
+- TypeScript narrows the type based on the `type` field
+
+## Optional blocks
+
+If blocks are optional on a collection, make the field optional in your schema:
+
+```ts
+schema: (c) =>
+  z.object({
+    title: z.string(),
+    blocks: parseBlocks(c).optional().default([]),
+  }),
+```
+
+## Multiple collections
+
+You can use `parseBlocks` in as many collections as you want - it reads from the same global registry:
+
+```ts
+const pages = defineCollection({
+	loader: glob({ pattern: '**/*.mdx', base: './src/content/pages' }),
+	schema: (c) => z.object({ blocks: parseBlocks(c) }),
+});
+
+const posts = defineCollection({
+	loader: glob({ pattern: '**/*.mdx', base: './src/content/posts' }),
+	schema: (c) => z.object({ blocks: parseBlocks(c) }),
+});
+```

@@ -1,0 +1,152 @@
+---
+title: API Reference
+description: Complete API reference for astro-frontmatter-cms.
+---
+
+## Integration
+
+### `frontmatterComponents()`
+
+The Astro integration. Add it to your `astro.config.mjs`.
+
+```ts
+import { frontmatterComponents } from 'astro-frontmatter-cms/integration';
+```
+
+Automatically discovers Astro components that export a `schema` created with `createSchema`, registers them, and provides a virtual module for component resolution at render time.
+
+**Import:** `astro-frontmatter-cms/integration`
+
+---
+
+## Schema
+
+### `createSchema(type, builder)`
+
+Creates a schema builder that pairs a Zod schema with a block type identifier.
+
+```ts
+import { createSchema } from 'astro-frontmatter-cms';
+
+export const schema = createSchema('Hero', (c: SchemaContext) =>
+	z.object({
+		heading: z.string(),
+		background: c.image(),
+	}),
+);
+```
+
+**Parameters:**
+
+| Name      | Type                              | Description                                                                                         |
+| --------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `type`    | `string`                          | The block type identifier used in frontmatter. Gets sanitized (non-alphanumeric replaced with `_`). |
+| `builder` | `(c: SchemaContext) => ZodObject` | A function receiving Astro's `SchemaContext` and returning a Zod object schema.                     |
+
+**Returns:** `SchemaBuilder<T>` - A callable schema builder with `.type` property.
+
+**Import:** `astro-frontmatter-cms`
+
+---
+
+### `parseBlocks(context)`
+
+Builds a Zod array schema as a discriminated union of all registered block types.
+
+```ts
+import { parseBlocks } from 'astro-frontmatter-cms/integration';
+
+const schema = (c) =>
+	z.object({
+		blocks: parseBlocks(c),
+	});
+```
+
+**Parameters:**
+
+| Name      | Type            | Description                                                        |
+| --------- | --------------- | ------------------------------------------------------------------ |
+| `context` | `SchemaContext` | The schema context provided by Astro's collection schema function. |
+
+**Returns:** `z.ZodArray<z.ZodDiscriminatedUnion<"type", ...>>` - A Zod array schema that validates each element against the matching block schema based on its `type` field.
+
+**Import:** `astro-frontmatter-cms/integration`
+
+---
+
+### `queryBlocks(blocks, schema)`
+
+Filters a blocks array to only items matching a specific schema's type.
+
+```ts
+import { queryBlocks } from 'astro-frontmatter-cms';
+
+const heroes = queryBlocks(data.blocks, heroSchema);
+```
+
+**Parameters:**
+
+| Name     | Type                                   | Description                                         |
+| -------- | -------------------------------------- | --------------------------------------------------- |
+| `blocks` | `SchemaMeta[] \| undefined \| never[]` | The blocks array from your content collection data. |
+| `schema` | `SchemaBuilder`                        | The schema builder to filter by.                    |
+
+**Returns:** `SchemaOf<T>[]` - A typed array of blocks matching the schema.
+
+**Import:** `astro-frontmatter-cms`
+
+---
+
+## Components
+
+### `<Frontmatter>`
+
+Renders an array of blocks by resolving each `type` to its registered component.
+
+```astro
+---
+import { Frontmatter } from 'astro-frontmatter-cms';
+---
+
+<Frontmatter blocks={data.blocks} />
+```
+
+**Props:**
+
+| Name       | Type                                    | Description                                                |
+| ---------- | --------------------------------------- | ---------------------------------------------------------- |
+| `blocks`   | `SchemaMeta[]`                          | The validated blocks array from your content data.         |
+| `callback` | `(data: SchemaMeta, i: number) => void` | Optional callback invoked for each block during rendering. |
+
+**Import:** `astro-frontmatter-cms`
+
+---
+
+## Types
+
+### `SchemaBuilder<T>`
+
+A callable function that builds a Zod schema for a given context. Has a `.type` property with the block type identifier.
+
+```ts
+import type { SchemaBuilder } from 'astro-frontmatter-cms';
+```
+
+### `SchemaOf<T>`
+
+Extracts the inferred TypeScript type from a schema builder.
+
+```ts
+import type { SchemaOf } from 'astro-frontmatter-cms';
+import { schema } from '@/sections/Hero.astro';
+
+type HeroProps = SchemaOf<typeof schema>;
+```
+
+### `SchemaMeta`
+
+The union type of all registered block schemas. This is what `parseBlocks` validates against.
+
+```ts
+import type { SchemaMeta } from 'astro-frontmatter-cms';
+```

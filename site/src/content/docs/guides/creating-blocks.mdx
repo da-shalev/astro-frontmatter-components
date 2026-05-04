@@ -1,0 +1,72 @@
+---
+title: Creating Blocks
+description: How to define block components with schemas.
+---
+
+A block is an Astro component that exports a `schema` created with `createSchema`. The integration discovers these automatically - no manual registration needed.
+
+We recommend keeping blocks in a dedicated `src/sections/` directory, separate from regular components. Blocks can technically live anywhere in `src/`, but separating them makes it clear which components are schema-driven content blocks vs regular UI components.
+
+Note that layouts cannot be blocks - they wrap your page and receive content as children, while blocks are rendered _by_ the layout from frontmatter data.
+
+## Basic block
+
+```astro title="src/sections/CTA.astro"
+---
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+
+export const schema = createSchema('CTA', (_: SchemaContext) =>
+	z.object({
+		label: z.string(),
+		href: z.string().url(),
+		variant: z.enum(['primary', 'secondary']).default('primary'),
+	}),
+);
+
+// export Props for island components to import
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<a href={meta.href} class={`cta cta--${meta.variant}`}>
+	{meta.label}
+</a>
+```
+
+We recommend using `meta` as the variable name and accessing props via `meta.` - this namespaces your block data cleanly in the template.
+
+Exporting `Props` lets island components import the type directly - see [Islands](/guides/islands/).
+
+## Using Astro's schema context
+
+`createSchema` receives Astro's `SchemaContext` as the first argument to the builder function. This gives you access to helpers like `image()`:
+
+```astro title="src/sections/Hero.astro"
+---
+import { createSchema, type SchemaOf } from 'astro-frontmatter-cms';
+import { z } from 'astro:content';
+
+export const schema = createSchema('Hero', (c: SchemaContext) =>
+	z.object({
+		heading: z.string(),
+		background: c.image(),
+		overlay: z.boolean().default(false),
+	}),
+);
+
+export type Props = SchemaOf<typeof schema>;
+const meta = Astro.props as Props;
+---
+
+<section class="hero">
+	<img src={meta.background.src} alt="" />
+	<h1>{meta.heading}</h1>
+</section>
+```
+
+The `image()` helper handles image resolution and optimization through Astro's asset pipeline.
+
+## Duplicate detection
+
+If two components register the same type name, the integration logs an error and skips the duplicate. Each type must map to exactly one component.

@@ -3,7 +3,7 @@ import { type SchemaMeta } from './integration';
 
 type Props = {
 	blocks?: SchemaMeta[];
-	callback?: (data: SchemaMeta, i: number) => void;
+	callback?: (data: SchemaMeta, i: number) => Record<string, unknown>;
 };
 
 const { blocks, callback } = Astro.props;
@@ -11,14 +11,13 @@ const components = (await import('virtual:astro-frontmatter-cms')).default;
 ---
 
 {
-	blocks?.map(async (props, i) => {
-		if (callback) callback(props, i);
-		const Component = components[props.type];
+	blocks?.map(async (block, i) => {
+		const Component = components[block.type];
 
 		if (Component == null) {
 			return <div>Unable to resolve frontmatter component</div>;
 		} else {
-			return <Component {...props} />;
+			return <Component {...block} {...callback?.(block, i)} />;
 		}
 	})
 }
